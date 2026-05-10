@@ -315,6 +315,147 @@ summaryRoutes.get("/stats", async (c) => {
   });
 });
 
+// Monthly detail endpoints — same response shape, different filter. Power the
+// /budget and /historical-avg tabs in the web UI.
+//
+//   /summary/income-detail  → months × isRealIncome transactions
+//   /summary/spend-detail   → months × isRealSpend transactions
+//
+// Response:
+//   {
+//     currentMonth: "2026-05",
+//     completedMonthCount: number,                    // # of fully-past months with data
+//     totalOverCompletedMonths: number,                // sum of those months' totals
+//     averageOverCompletedMonths: number,              // total / completedMonthCount
+//     months: [{ month, isComplete, total, transactions: [...] }] (desc by month)
+//   }
+//
+// "Completed" = month whose last day is strictly before today. Today's
+// in-progress month appears in the list (so the user can see partial data)
+// but is excluded from the rolling total.
+summaryRoutes.get("/income-detail", async (c) => {
+  return c.json(await buildMonthlyDetail("income", {}));
+});
+// Historical-avg view: optional ?throughDay=N (only count transactions on
+// or before day N of each month — used for apples-to-apples comparison)
+// and optional ?categoryId=N (filter to that top-level category OR specific
+// subcategory; server detects which by reading the category's parent_id).
+summaryRoutes.get("/spend-detail", async (c) => {
+  const q = c.req.query();
+  const throughDay = q.throughDay ? Math.max(1, Math.min(31, Number(q.throughDay))) : undefined;
+  const categoryId = q.categoryId ? Number(q.categoryId) : undefined;
+  return c.json(await buildMonthlyDetail("spend", { throughDay, categoryId }));
+});
+
+interface DetailOptions {
+  throughDay?: number;
+  categoryId?: number;
+}
+
+async function buildMonthlyDetail(mode: "income" | "spend", opts: DetailOptions) {
+  const db = getDb();
+  const today = new Date();
+  const todayIso = today.toISOString().slice(0, 10);
+  const currentMonth = todayIso.slice(0, 7);
+
+  // Resolve the categoryId filter to "match on transactions.category_id" or
+  // "match on transactions.subcategory_id" by inspecting the category row.
+  let topLevelFilter: number | null = null;
+  let subcategoryFilter: number | null = null;
+  if (opts.categoryId !== undefined && Number.isFinite(opts.categoryId)) {
+    const c = (await db.select().from(categories).where(eq(categories.id, opts.categoryId)).limit(1))[0];
+    if (c) {
+      if (c.parentId === null) topLevelFilter = c.id;
+      else subcategoryFilter = c.id;
+    }
+  }
+
+  // Pull every transaction with its categorization joined in. We could
+  // restrict by date but for a personal-finance DB a full table scan is
+  // cheap and lets us assemble the per-month buckets in one pass.
+  const rows = await db
+    .select({
+      id: transactions.id,
+      date: transactions.date,
+      description: transactions.description,
+      amount: transactions.amount,
+      accountId: transactions.accountId,
+      accountName: accounts.name,
+      categoryId: transactions.categoryId,
+      subcategoryId: transactions.subcategoryId,
+      categoryName: cat.name,
+      categoryType: cat.type,
+      subcategoryName: sub.name,
+    })
+    .from(transactions)
+    .leftJoin(accounts, eq(accounts.id, transactions.accountId))
+    .leftJoin(cat, eq(cat.id, transactions.categoryId))
+    .leftJoin(sub, eq(sub.id, transactions.subcategoryId));
+
+  const byMonth = new Map<string, Array<typeof rows[number]>>();
+  for (const r of rows) {
+    const ct = {
+      date: r.date,
+      amount: r.amount,
+      categoryType: (r.categoryType ?? null) as CategorizedTxn["categoryType"],
+      subcategoryName: r.subcategoryName,
+    };
+    const keep = mode === "income" ? isRealIncome(ct) : isRealSpend(ct);
+    if (!keep) continue;
+    // throughDay: include only transactions on or before day N of the month.
+    // Lets the user compare "spend through day 15" across months even when
+    // the current month hasn't ended yet.
+    if (opts.throughDay !== undefined) {
+      const day = Number(r.date.slice(8, 10));
+      if (day > opts.throughDay) continue;
+    }
+    // Category filter — narrow to either a top-level category (match on
+    // category_id) or a specific subcategory (match on subcategory_id).
+    if (topLevelFilter !== null && r.categoryId !== topLevelFilter) continue;
+    if (subcategoryFilter !== null && r.subcategoryId !== subcategoryFilter) continue;
+    const monthKey = r.date.slice(0, 7);
+    const arr = byMonth.get(monthKey) ?? [];
+    arr.push(r);
+    byMonth.set(monthKey, arr);
+  }
+
+  const monthKeys = [...byMonth.keys()].sort().reverse();
+  const months = monthKeys.map((m) => {
+    const txns = byMonth.get(m)!.sort((a, b) => a.date.localeCompare(b.date));
+    const total = txns.reduce((s, t) => s + Math.abs(t.amount), 0);
+    return {
+      month: m,
+      isComplete: m < currentMonth,
+      total,
+      transactions: txns.map((t) => ({
+        id: t.id,
+        date: t.date,
+        description: t.description,
+        amount: t.amount,
+        accountId: t.accountId,
+        accountName: t.accountName,
+        categoryName: t.categoryName,
+        subcategoryName: t.subcategoryName,
+      })),
+    };
+  });
+
+  const completed = months.filter((m) => m.isComplete);
+  const totalOverCompletedMonths = completed.reduce((s, m) => s + m.total, 0);
+  const completedMonthCount = completed.length;
+  const averageOverCompletedMonths = completedMonthCount > 0
+    ? totalOverCompletedMonths / completedMonthCount
+    : 0;
+
+  return {
+    currentMonth,
+    completedMonthCount,
+    totalOverCompletedMonths,
+    averageOverCompletedMonths,
+    months,
+  };
+}
+
 // Helpers.
 
 // Pull every transaction in [from, to] joined with its parent category and

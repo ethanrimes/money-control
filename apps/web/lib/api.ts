@@ -131,6 +131,30 @@ export interface Stats {
   asOf: string;
 }
 
+export interface MonthlyDetailTxn {
+  id: number;
+  date: string;
+  description: string;
+  amount: number;
+  accountId: number;
+  accountName: string | null;
+  categoryName: string | null;
+  subcategoryName: string | null;
+}
+
+export interface MonthlyDetail {
+  currentMonth: string;
+  completedMonthCount: number;
+  totalOverCompletedMonths: number;
+  averageOverCompletedMonths: number;
+  months: Array<{
+    month: string;          // YYYY-MM
+    isComplete: boolean;
+    total: number;
+    transactions: MonthlyDetailTxn[];
+  }>;
+}
+
 export interface BudgetSettings {
   id: number;
   monthlySavingsTarget: number;
@@ -221,6 +245,15 @@ export const api = {
   byCategory: (month?: string) =>
     request<{ month: string; categories: ByCategoryRow[] }>(`/summary/by-category${month ? `?month=${month}` : ""}`),
   stats: () => request<Stats>("/summary/stats"),
+
+  incomeDetail: () => request<MonthlyDetail>("/summary/income-detail"),
+  spendDetail: (q: { throughDay?: number; categoryId?: number | null } = {}) => {
+    const sp = new URLSearchParams();
+    if (q.throughDay !== undefined) sp.set("throughDay", String(q.throughDay));
+    if (q.categoryId != null) sp.set("categoryId", String(q.categoryId));
+    const qs = sp.toString();
+    return request<MonthlyDetail>(`/summary/spend-detail${qs ? `?${qs}` : ""}`);
+  },
 
   sync: () => request<SyncResult>("/teller/sync", { method: "POST" }),
 
