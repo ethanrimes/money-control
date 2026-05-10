@@ -7,6 +7,9 @@ export const config = {
   teller: {
     env: (process.env.TELLER_ENV ?? "sandbox") as "sandbox" | "development" | "production",
     appId: process.env.TELLER_APP_ID ?? "",
+    // Used to verify HMAC signatures Teller attaches to Connect enrollment
+    // payloads and to webhooks. Server-only — never sent to the browser.
+    signingKey: process.env.TELLER_SIGNING_KEY ?? "",
     certPath: process.env.TELLER_CERT_PATH ?? path.join(repoRoot, "teller", "certificate.pem"),
     keyPath: process.env.TELLER_KEY_PATH ?? path.join(repoRoot, "teller", "private_key.pem"),
     apiBase: "https://api.teller.io",
