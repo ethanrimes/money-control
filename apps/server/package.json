@@ -5,11 +5,15 @@
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/index.ts",
+    "start": "tsx src/index.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@hono/node-server": "^1.13.7",
     "@moneycontrol/core": "*",
-    "@moneycontrol/db": "*"
+    "@moneycontrol/db": "*",
+    "drizzle-orm": "^0.45.2",
+    "hono": "^4.6.14"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
