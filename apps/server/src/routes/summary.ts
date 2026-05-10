@@ -1,10 +1,26 @@
 import { Hono } from "hono";
-import { and, eq, gte, isNotNull, lte, sql } from "drizzle-orm";
+import { and, eq, gte, lte, sql } from "drizzle-orm";
+import { alias } from "drizzle-orm/sqlite-core";
 import { getDb } from "@moneycontrol/db";
 import { accounts, balances, budgetSettings, categories, transactions } from "@moneycontrol/db/schema";
-import { computeMonthlyBudget, daysInMonth, buildSpendSeries } from "@moneycontrol/core";
+import {
+  aggregateTrailingIncome,
+  buildHistoricalDailyCum,
+  buildSpendSeries,
+  computeMonthlyBudget,
+  daysInMonth,
+  isRealIncome,
+  isRealSpend,
+  type CategorizedTxn,
+} from "@moneycontrol/core";
 
 export const summaryRoutes = new Hono();
+
+// Aliases used by every join in this file. `cat` = parent category,
+// `sub` = subcategory. Both are LEFT JOINs since transactions can be
+// uncategorized.
+const cat = alias(categories, "cat");
+const sub = alias(categories, "sub");
 
 // Net cash position: sum of latest depository balances minus sum of latest
 // credit balances (credit balances are stored as positive = amount owed).
@@ -62,58 +78,15 @@ summaryRoutes.get("/spend-series", async (c) => {
     ? today.getUTCDate()
     : total;
 
-  // Current-month outflows. We treat any negative-amount transaction as spend.
-  const monthTxns = await db
-    .select({ date: transactions.date, amount: transactions.amount })
-    .from(transactions)
-    .where(and(gte(transactions.date, monthStart), lte(transactions.date, monthEnd)));
+  const monthTxns = await selectCategorized(db, monthStart, monthEnd);
 
-  // Trailing N months: per-day cumulative spend, averaged across months.
   const histStart = isoMonthOffset(year, month, -historyMonths);
   const histEnd = isoMonthOffset(year, month, -1, true);
-  const histRows = await db
-    .select({
-      date: transactions.date,
-      amount: transactions.amount,
-    })
-    .from(transactions)
-    .where(and(gte(transactions.date, histStart), lte(transactions.date, histEnd)));
+  const histTxns = await selectCategorized(db, histStart, histEnd);
 
-  // Build day-of-month -> sum of cum outflow per month, then average.
-  const byMonthDay: Record<string, number[]> = {}; // 'YYYY-MM' -> [day1cum, day2cum, ...]
-  for (const r of histRows) {
-    if (r.amount >= 0) continue;
-    const key = r.date.slice(0, 7);
-    const day = Number(r.date.slice(8, 10));
-    if (!byMonthDay[key]) byMonthDay[key] = new Array(31).fill(0);
-    byMonthDay[key]![day - 1] += -r.amount;
-  }
-  for (const key of Object.keys(byMonthDay)) {
-    const arr = byMonthDay[key]!;
-    for (let i = 1; i < arr.length; i++) arr[i] = (arr[i] ?? 0) + (arr[i - 1] ?? 0);
-  }
-  const monthKeys = Object.keys(byMonthDay);
-  const historicalDailyCum: number[] = new Array(total).fill(0);
-  if (monthKeys.length > 0) {
-    for (let d = 0; d < total; d++) {
-      let s = 0;
-      for (const k of monthKeys) s += byMonthDay[k]![d] ?? 0;
-      historicalDailyCum[d] = s / monthKeys.length;
-    }
-  }
-
-  // Budget = avg monthly income (over history window) - savings target.
-  // Income = sum of positive amounts per month, averaged.
-  const incomeByMonth: Record<string, number> = {};
-  for (const r of histRows) {
-    if (r.amount <= 0) continue;
-    const key = r.date.slice(0, 7);
-    incomeByMonth[key] = (incomeByMonth[key] ?? 0) + r.amount;
-  }
-  const incomeMonthKeys = Object.keys(incomeByMonth);
-  const trailingMonthlyIncome = incomeMonthKeys.length > 0
-    ? incomeMonthKeys.reduce((s, k) => s + (incomeByMonth[k] ?? 0), 0) / incomeMonthKeys.length
-    : 0;
+  const incomeAgg = aggregateTrailingIncome(histTxns);
+  const trailingMonthlyIncome = incomeAgg.average;
+  const historicalDailyCum = buildHistoricalDailyCum(histTxns, total);
 
   const settings = await db.select().from(budgetSettings).orderBy(sql`${budgetSettings.effectiveFrom} desc`).limit(1);
   const monthlySavingsTarget = settings[0]?.monthlySavingsTarget ?? 0;
@@ -124,20 +97,32 @@ summaryRoutes.get("/spend-series", async (c) => {
     month1to12: month,
     todayDay,
     monthlyBudget,
-    txns: monthTxns.map((t) => ({ date: t.date, amount: t.amount })),
+    txns: monthTxns,
     historicalDailyCum,
   });
+
+  // Also surface trailing spend so the UI can show users why the budget
+  // looks the way it does. Avg per month over the same window.
+  let trailingSpendTotal = 0;
+  for (const t of histTxns) if (isRealSpend(t)) trailingSpendTotal += -t.amount;
+  const trailingMonthlySpend = incomeAgg.monthsObserved > 0
+    ? trailingSpendTotal / Math.max(1, incomeAgg.monthsObserved)
+    : 0;
 
   return c.json({
     month: monthArg,
     monthlyBudget,
     trailingMonthlyIncome,
+    trailingMonthlySpend,
     monthlySavingsTarget,
+    monthsObserved: incomeAgg.monthsObserved,
     points,
   });
 });
 
 // Per-category current-month spend vs trailing average.
+// Excludes income + transfer categories from "spend" so they don't pollute
+// the bars.
 summaryRoutes.get("/by-category", async (c) => {
   const q = c.req.query();
   const today = new Date();
@@ -156,54 +141,40 @@ summaryRoutes.get("/by-category", async (c) => {
 
   const db = getDb();
 
-  const current = await db
-    .select({
-      categoryId: transactions.categoryId,
-      categoryName: categories.name,
-      total: sql<number>`coalesce(sum(${transactions.amount}), 0)`,
-      count: sql<number>`count(*)`,
-    })
-    .from(transactions)
-    .leftJoin(categories, eq(categories.id, transactions.categoryId))
-    .where(and(
-      gte(transactions.date, monthStart),
-      lte(transactions.date, monthEnd),
-      sql`${transactions.amount} < 0`,
-    ))
-    .groupBy(transactions.categoryId, categories.name);
+  // Pull both windows fully-categorized, then aggregate in JS so we can
+  // apply the same isRealSpend filter the budget chart uses.
+  const monthTxns = await selectCategorized(db, monthStart, monthEnd);
+  const histTxns = await selectCategorized(db, histStart, histEnd);
 
-  const hist = await db
-    .select({
-      categoryId: transactions.categoryId,
-      total: sql<number>`coalesce(sum(${transactions.amount}), 0)`,
-    })
-    .from(transactions)
-    .where(and(
-      gte(transactions.date, histStart),
-      lte(transactions.date, histEnd),
-      sql`${transactions.amount} < 0`,
-      isNotNull(transactions.categoryId),
-    ))
-    .groupBy(transactions.categoryId);
+  // Distinct months actually present in the history window.
+  const monthsObserved = new Set(histTxns.map((t) => t.date.slice(0, 7))).size || 1;
 
-  // Distinct months present in history window.
-  const histMonthCount = await db
-    .select({ n: sql<number>`count(distinct substr(${transactions.date}, 1, 7))` })
-    .from(transactions)
-    .where(and(gte(transactions.date, histStart), lte(transactions.date, histEnd)));
-  const months = Math.max(1, histMonthCount[0]?.n ?? 1);
+  const monthByCat = new Map<number | null, { name: string; spend: number; count: number }>();
+  for (const t of monthTxns) {
+    if (!isRealSpend(t)) continue;
+    const key = t.categoryId ?? null;
+    const name = t.categoryName ?? "Uncategorized";
+    const cur = monthByCat.get(key) ?? { name, spend: 0, count: 0 };
+    cur.spend += -t.amount;
+    cur.count += 1;
+    monthByCat.set(key, cur);
+  }
 
-  const histById = new Map(hist.map((h) => [h.categoryId, h.total]));
-  const out = current.map((row) => {
-    const histTotal = histById.get(row.categoryId) ?? 0;
-    return {
-      categoryId: row.categoryId,
-      categoryName: row.categoryName ?? "Uncategorized",
-      currentSpend: -row.total,
-      historicalAverage: -histTotal / months,
-      transactionCount: row.count,
-    };
-  }).sort((a, b) => b.currentSpend - a.currentSpend);
+  const histByCat = new Map<number | null, number>();
+  for (const t of histTxns) {
+    if (!isRealSpend(t)) continue;
+    const key = t.categoryId ?? null;
+    histByCat.set(key, (histByCat.get(key) ?? 0) + -t.amount);
+  }
+
+  const out = Array.from(monthByCat.entries()).map(([id, v]) => ({
+    categoryId: id,
+    categoryName: v.name,
+    currentSpend: v.spend,
+    historicalAverage: (histByCat.get(id) ?? 0) / monthsObserved,
+    transactionCount: v.count,
+  })).sort((a, b) => b.currentSpend - a.currentSpend);
+
   return c.json({ month: monthArg, categories: out });
 });
 
@@ -216,36 +187,53 @@ summaryRoutes.get("/stats", async (c) => {
   const monthEnd = `${year}-${String(month).padStart(2, "0")}-${String(daysInMonth(year, month)).padStart(2, "0")}`;
 
   const db = getDb();
-  const mtdSpendRow = await db
-    .select({ total: sql<number>`coalesce(sum(${transactions.amount}), 0)` })
-    .from(transactions)
-    .where(and(
-      gte(transactions.date, monthStart),
-      lte(transactions.date, monthEnd),
-      sql`${transactions.amount} < 0`,
-    ));
-  const mtdIncomeRow = await db
-    .select({ total: sql<number>`coalesce(sum(${transactions.amount}), 0)` })
-    .from(transactions)
-    .where(and(
-      gte(transactions.date, monthStart),
-      lte(transactions.date, monthEnd),
-      sql`${transactions.amount} > 0`,
-    ));
-  const txnCountRow = await db
-    .select({ n: sql<number>`count(*)` })
-    .from(transactions)
-    .where(and(gte(transactions.date, monthStart), lte(transactions.date, monthEnd)));
+  const txns = await selectCategorized(db, monthStart, monthEnd);
 
+  let mtdSpend = 0;
+  let mtdIncome = 0;
+  for (const t of txns) {
+    if (isRealSpend(t)) mtdSpend += -t.amount;
+    else if (isRealIncome(t)) mtdIncome += t.amount;
+  }
   return c.json({
-    mtdSpend: -(mtdSpendRow[0]?.total ?? 0),
-    mtdIncome: mtdIncomeRow[0]?.total ?? 0,
-    mtdTransactionCount: txnCountRow[0]?.n ?? 0,
+    mtdSpend,
+    mtdIncome,
+    mtdTransactionCount: txns.length,
     asOf: today.toISOString(),
   });
 });
 
 // Helpers.
+
+// Pull every transaction in [from, to] joined with its parent category and
+// subcategory so we have type + names available for the budget filters.
+async function selectCategorized(
+  db: ReturnType<typeof getDb>,
+  from: string,
+  to: string,
+): Promise<Array<CategorizedTxn & { categoryId: number | null; categoryName: string | null }>> {
+  const rows = await db
+    .select({
+      date: transactions.date,
+      amount: transactions.amount,
+      categoryId: transactions.categoryId,
+      categoryName: cat.name,
+      categoryType: cat.type,
+      subcategoryName: sub.name,
+    })
+    .from(transactions)
+    .leftJoin(cat, eq(cat.id, transactions.categoryId))
+    .leftJoin(sub, eq(sub.id, transactions.subcategoryId))
+    .where(and(gte(transactions.date, from), lte(transactions.date, to)));
+  return rows.map((r) => ({
+    date: r.date,
+    amount: r.amount,
+    categoryId: r.categoryId,
+    categoryName: r.categoryName,
+    categoryType: (r.categoryType ?? null) as CategorizedTxn["categoryType"],
+    subcategoryName: r.subcategoryName,
+  }));
+}
 
 // Returns ISO date for first day of (year-month + offsetMonths). If `endOfMonth`
 // is true, returns the last day of that month instead.
