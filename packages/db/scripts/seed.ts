@@ -225,9 +225,25 @@ async function main() {
   }
   console.log(`categories: ${topLevelIds.size} top-level + ${subIds.size} subcategories`);
 
-  // Transactions.
+  // Transactions: insert ONLY Amazon line-item rows. Everything else in the
+  // xlsx (subscriptions, dining, transfers, etc.) duplicates what Teller and
+  // Plaid pull from the real accounts, and we don't want those rows
+  // double-counted. The Amazon line items are the exception: the xlsx is
+  // the canonical source for per-item Amazon breakdowns, since Teller only
+  // sees one aggregate charge per order.
+  //
+  // The categorization-rule build below still uses ALL 452 rows — the
+  // rules are derived from descriptions, not transactions, and we want
+  // every learned mapping (Apple.com bill -> Subscriptions, etc.) to
+  // remain available for auto-categorizing aggregator pulls.
+  const AMAZON_PREFIX = "Amazon — "; // "Amazon — " with U+2014 em-dash
   let inserted = 0;
+  let skipped = 0;
   for (const r of rows) {
+    if (!r.description.startsWith(AMAZON_PREFIX)) {
+      skipped++;
+      continue;
+    }
     const accountId = accountIdByName.get(r.account)!;
     const categoryId = (r.category && r.category !== "#N/A")
       ? topLevelIds.get(r.category) ?? null
@@ -248,7 +264,7 @@ async function main() {
     });
     inserted++;
   }
-  console.log(`transactions: ${inserted}`);
+  console.log(`transactions: ${inserted} Amazon line items inserted (${skipped} non-Amazon xlsx rows intentionally skipped — Teller/Plaid pull those duplicates)`);
 
   // Categorization rules: most-recent assignment wins per normalized description.
   // (Iterating in row order means later rows overwrite earlier ones.)
