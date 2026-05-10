@@ -8,7 +8,7 @@
 //     a categorization rule AND retro-applies it to other uncategorized rows
 //     with the same normalized description, so labeling one transfer cascades.
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, fmtUsd, type CategoryNode, type TransactionRow } from "@/lib/api";
 import { Card } from "./Card";
 
@@ -35,6 +35,13 @@ export function TransactionsTable({ refreshKey }: { refreshKey: number }) {
   const [savingId, setSavingId] = useState<number | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Drag-fill state. While the user drags, `fillSource` is the row whose
+  // category we'll propagate; `fillHoverIndex` is the bottom of the highlight
+  // range (always in the currently-displayed sortedRows ordering). Both are
+  // null when nothing is being dragged.
+  const [fillSource, setFillSource] = useState<{ rowId: number; sourceIndex: number; value: string } | null>(null);
+  const [fillHoverIndex, setFillHoverIndex] = useState<number | null>(null);
 
   useEffect(() => {
     setRows(null);
@@ -114,6 +121,59 @@ export function TransactionsTable({ refreshKey }: { refreshKey: number }) {
     }
     return out;
   }, [cats]);
+
+  // Drag-fill mechanics. The handle is rendered absolutely at the bottom-right
+  // of every category cell. mousedown on it captures the source row + value;
+  // mouseover on other rows' category cells extends the range; mouseup
+  // applies via the bulk PATCH endpoint.
+  function startDragFill(rowId: number, value: string, sourceIndex: number) {
+    setFillSource({ rowId, sourceIndex, value });
+    setFillHoverIndex(sourceIndex);
+  }
+
+  const endDragFill = useCallback(async () => {
+    if (!fillSource || fillHoverIndex === null) {
+      setFillSource(null);
+      setFillHoverIndex(null);
+      return;
+    }
+    const top = Math.min(fillSource.sourceIndex, fillHoverIndex);
+    const bot = Math.max(fillSource.sourceIndex, fillHoverIndex);
+    // Exclude the source row itself — its category is already correct.
+    const targetIds = sortedRows.slice(top, bot + 1).map((r) => r.id).filter((id) => id !== fillSource.rowId);
+    setFillSource(null);
+    setFillHoverIndex(null);
+    if (targetIds.length === 0) return;
+
+    // Resolve the destination category from the source value.
+    let categoryId: number | null = null;
+    let subcategoryId: number | null = null;
+    if (fillSource.value !== "") {
+      const id = Number(fillSource.value);
+      const opt = catOptions.find((o) => o.id === id);
+      if (!opt) return;
+      categoryId = opt.parentId ?? id;
+      subcategoryId = opt.parentId === null ? null : id;
+    }
+    try {
+      const res = await api.bulkPatchTransactions({ ids: targetIds, categoryId, subcategoryId });
+      const total = res.updated + res.backfillCount;
+      showToast(`Drag-filled ${res.updated} row${res.updated === 1 ? "" : "s"}${res.backfillCount > 0 ? ` + auto-applied to ${res.backfillCount} more` : ""}.`);
+      void total;
+      const fresh = await api.transactions({ limit: 1000 });
+      setRows(fresh);
+    } catch (e) {
+      alert(`Drag-fill failed: ${e}`);
+    }
+  }, [fillSource, fillHoverIndex, sortedRows, catOptions]);
+
+  // Listen for mouseup anywhere so dropping outside the table still resolves.
+  useEffect(() => {
+    if (!fillSource) return;
+    const onUp = () => { void endDragFill(); };
+    window.addEventListener("mouseup", onUp);
+    return () => window.removeEventListener("mouseup", onUp);
+  }, [fillSource, endDragFill]);
 
   async function saveCategory(txId: number, value: string) {
     if (!cats) return;
@@ -227,34 +287,61 @@ export function TransactionsTable({ refreshKey }: { refreshKey: number }) {
                 </tr>
               </thead>
               <tbody>
-                {sortedRows.map((r) => (
-                  <tr key={r.id} className="hover:bg-bg/60">
-                    <td className="border-b border-border/50 py-2 pr-4 text-muted tabular">{r.date}</td>
-                    <td className="border-b border-border/50 py-2 pr-4">
-                      {r.description}
-                      {r.source !== "excel" && (
-                        <span className="ml-2 rounded bg-bg px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-muted">{r.source}</span>
-                      )}
-                    </td>
-                    <td className="border-b border-border/50 py-2 pr-4 text-muted">{r.accountName}</td>
-                    <td className="border-b border-border/50 py-2 pr-4">
-                      <select
-                        className="w-56 max-w-full rounded border border-border bg-bg px-1.5 py-1 text-xs"
-                        value={r.subcategoryId ?? r.categoryId ?? ""}
-                        disabled={savingId === r.id}
-                        onChange={(e) => saveCategory(r.id, e.target.value)}
+                {sortedRows.map((r, rowIndex) => {
+                  const inFillRange = fillSource !== null && fillHoverIndex !== null
+                    && rowIndex >= Math.min(fillSource.sourceIndex, fillHoverIndex)
+                    && rowIndex <= Math.max(fillSource.sourceIndex, fillHoverIndex);
+                  const fillValue = fillSource?.value ?? "";
+                  const previewLabel = inFillRange && r.id !== fillSource?.rowId
+                    ? (fillValue === "" ? "— uncategorized —" : catOptions.find((o) => o.id === Number(fillValue))?.label ?? "")
+                    : null;
+                  return (
+                    <tr key={r.id} className={`hover:bg-bg/60 ${inFillRange ? "bg-accent/5" : ""}`}>
+                      <td className="border-b border-border/50 py-2 pr-4 text-muted tabular">{r.date}</td>
+                      <td className="border-b border-border/50 py-2 pr-4">
+                        {r.description}
+                        {r.source !== "excel" && (
+                          <span className="ml-2 rounded bg-bg px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-muted">{r.source}</span>
+                        )}
+                      </td>
+                      <td className="border-b border-border/50 py-2 pr-4 text-muted">{r.accountName}</td>
+                      <td
+                        className="group relative border-b border-border/50 py-2 pr-4"
+                        onMouseEnter={() => { if (fillSource) setFillHoverIndex(rowIndex); }}
                       >
-                        <option value="">— uncategorized —</option>
-                        {catOptions.map((o) => (
-                          <option key={o.id} value={o.id}>{o.label}</option>
-                        ))}
-                      </select>
-                    </td>
-                    <td className={`border-b border-border/50 py-2 pr-2 text-right tabular ${r.amount < 0 ? "text-negative" : "text-positive"}`}>
-                      {fmtUsd(r.amount, { sign: r.amount > 0 })}
-                    </td>
-                  </tr>
-                ))}
+                        <select
+                          className={`w-56 max-w-full rounded border border-border bg-bg px-1.5 py-1 text-xs ${previewLabel ? "ring-1 ring-accent/60" : ""}`}
+                          value={previewLabel
+                            ? (fillValue === "" ? "" : Number(fillValue))
+                            : (r.subcategoryId ?? r.categoryId ?? "")}
+                          disabled={savingId === r.id || fillSource !== null}
+                          onChange={(e) => saveCategory(r.id, e.target.value)}
+                        >
+                          <option value="">— uncategorized —</option>
+                          {catOptions.map((o) => (
+                            <option key={o.id} value={o.id}>{o.label}</option>
+                          ))}
+                        </select>
+                        {/* Fill handle: small square in the bottom-right of every
+                            category cell. Click + drag down to propagate this row's
+                            category to the rows below. */}
+                        <button
+                          type="button"
+                          onMouseDown={(e) => {
+                            e.preventDefault();
+                            startDragFill(r.id, String(r.subcategoryId ?? r.categoryId ?? ""), rowIndex);
+                          }}
+                          title="Drag to fill the same category into rows below"
+                          className="absolute -right-1 bottom-1 h-2.5 w-2.5 cursor-crosshair rounded-sm bg-accent opacity-0 transition group-hover:opacity-80 hover:opacity-100"
+                          aria-label="Drag-fill category"
+                        />
+                      </td>
+                      <td className={`border-b border-border/50 py-2 pr-2 text-right tabular ${r.amount < 0 ? "text-negative" : "text-positive"}`}>
+                        {fmtUsd(r.amount, { sign: r.amount > 0 })}
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
