@@ -17,8 +17,9 @@ let tmpDbPath: string;
 async function freshDb() {
   tmpDbPath = path.join(os.tmpdir(), `mc-test-${Date.now()}-${Math.random().toString(36).slice(2)}.db`);
   process.env.DATABASE_FILE = tmpDbPath;
-  // Lazy-import after env is set so the client picks up the override.
-  const { getDb, getRawSqlite } = await import("../src/client.js");
+  // Reset the singleton cache so the new DATABASE_FILE actually takes effect.
+  const { getDb, getRawSqlite, __resetForTests } = await import("../src/client.js");
+  __resetForTests();
   const db = getDb();
   const sqlite = getRawSqlite();
   const migrationsFolder = path.resolve(import.meta.dirname, "../drizzle");
@@ -103,6 +104,44 @@ test("resolveCategory: normalizes punctuation/case so casing doesn't miss the ru
     assert.equal(r.categoryId, catId, `expected match for: ${desc}`);
   }
 
+  t.after(() => {
+    try { fs.unlinkSync(tmpDbPath); } catch { /* ignore */ }
+  });
+});
+
+test("categories CRUD: create top-level + subcategory, rename, delete-promote, delete-cascade", async (t) => {
+  const { db } = await freshDb();
+  const { categories } = await import("../src/schema.js");
+  const { eq, isNull, and } = await import("drizzle-orm");
+
+  // Create top-level "Food"; create subcategory "Dining" under it.
+  const food = (await db.insert(categories).values({ name: "Food", type: "expense" }).returning())[0]!;
+  const dining = (await db.insert(categories).values({ name: "Dining", parentId: food.id, type: "expense" }).returning())[0]!;
+  const groceries = (await db.insert(categories).values({ name: "Groceries", parentId: food.id, type: "expense" }).returning())[0]!;
+
+  // Rename "Food" to "Food & Drink".
+  await db.update(categories).set({ name: "Food & Drink" }).where(eq(categories.id, food.id));
+  const renamed = (await db.select().from(categories).where(eq(categories.id, food.id)))[0]!;
+  assert.equal(renamed.name, "Food & Drink");
+
+  // Delete-promote: child subcategories get parentId set to null (the
+  // categories.ts route does this when ?cascade=0).
+  await db.update(categories).set({ parentId: null }).where(eq(categories.parentId, food.id));
+  await db.delete(categories).where(eq(categories.id, food.id));
+  const after = await db.select().from(categories);
+  assert.equal(after.find((r) => r.id === food.id), undefined, "Food should be gone");
+  const promotedDining = after.find((r) => r.id === dining.id);
+  assert.equal(promotedDining?.parentId, null, "Dining should be promoted to top-level");
+
+  // Cascade delete: insert "Travel" + child "Hotel"; delete with cascade.
+  const travel = (await db.insert(categories).values({ name: "Travel", type: "expense" }).returning())[0]!;
+  await db.insert(categories).values({ name: "Hotel", parentId: travel.id, type: "expense" });
+  await db.delete(categories).where(eq(categories.parentId, travel.id));
+  await db.delete(categories).where(eq(categories.id, travel.id));
+  const final = await db.select().from(categories);
+  assert.equal(final.some((r) => r.name === "Travel" || r.name === "Hotel"), false, "cascade delete should remove both");
+
+  void groceries; // referenced for clarity
   t.after(() => {
     try { fs.unlinkSync(tmpDbPath); } catch { /* ignore */ }
   });

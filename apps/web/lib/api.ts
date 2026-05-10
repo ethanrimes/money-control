@@ -179,6 +179,18 @@ export const api = {
 
   accounts: () => request<AccountRow[]>("/accounts"),
   categories: () => request<CategoryNode[]>("/categories"),
+  createCategory: (body: { name: string; parentId?: number | null; type?: "expense" | "income" | "transfer" }) =>
+    request<{ id: number; name: string; parentId: number | null; type: "expense" | "income" | "transfer" }>("/categories", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  patchCategory: (id: number, body: { name?: string; type?: "expense" | "income" | "transfer" }) =>
+    request<{ id: number; name: string; parentId: number | null; type: "expense" | "income" | "transfer" }>(`/categories/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    }),
+  deleteCategory: (id: number, opts?: { cascade?: boolean }) =>
+    request<{ ok: boolean }>(`/categories/${id}${opts?.cascade ? "?cascade=1" : ""}`, { method: "DELETE" }),
 
   transactions: (q: {
     from?: string;

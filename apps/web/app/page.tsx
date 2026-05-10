@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { BudgetSettings } from "@/components/BudgetSettings";
+import { CategoriesEditor } from "@/components/CategoriesEditor";
 import { CategoryBars } from "@/components/CategoryBars";
 import { LinkedAccountsCard } from "@/components/LinkedAccountsCard";
 import { RefreshButton } from "@/components/RefreshButton";
@@ -40,6 +41,7 @@ export default function DashboardPage() {
 
         <CategoryBars refreshKey={refreshKey} />
         <TransactionsTable refreshKey={refreshKey} />
+        <CategoriesEditor refreshKey={refreshKey} onChange={bump} />
       </div>
     </main>
   );

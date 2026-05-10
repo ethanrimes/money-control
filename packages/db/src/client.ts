@@ -74,4 +74,15 @@ export function getRawSqlite(): DatabaseSync {
   return openSqlite();
 }
 
+// Test-only: drop the cached singletons so the next getDb() call re-reads
+// process.env.DATABASE_FILE. Used by `freshDb()` in tests so each test gets
+// an isolated SQLite file.
+export function __resetForTests(): void {
+  if (_sqlite) {
+    try { _sqlite.close(); } catch { /* ignore */ }
+  }
+  _sqlite = null;
+  _db = null;
+}
+
 export { schema };
