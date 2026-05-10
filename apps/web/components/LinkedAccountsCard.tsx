@@ -40,8 +40,11 @@ export function LinkedAccountsCard({
   }
 
   const showSetupHint = config && (!config.appId || !config.mtlsConfigured);
+  // Orphan group (seeded-from-Excel accounts not backed by any aggregator)
+  // is intentionally hidden: those accounts have $0 live balance and are
+  // just visual noise. Their historical transactions stay in the DB and
+  // continue to appear in the transactions table.
   const linkedGroups = summary?.groups.filter((g) => g.enrollmentId !== 0) ?? [];
-  const orphanGroup = summary?.groups.find((g) => g.enrollmentId === 0);
 
   return (
     <Card
@@ -90,13 +93,6 @@ export function LinkedAccountsCard({
               onDisconnect={() => disconnect(g)}
             />
           ))}
-          {orphanGroup && orphanGroup.accounts.length > 0 && (
-            <InstitutionBlock
-              name={orphanGroup.institutionName}
-              accounts={orphanGroup.accounts}
-              subtle
-            />
-          )}
         </div>
       )}
 
