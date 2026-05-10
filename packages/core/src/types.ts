@@ -46,3 +46,12 @@ export interface NetCashSnapshot {
   netCash: number;     // depository - credit
   perAccount: Array<{ accountId: number; name: string; type: AccountType; balance: number }>;
 }
+
+// Display-side sign convention for an account: depository balances are
+// positive (money you have), credit balances are negative (money you owe).
+// The aggregator stores both as positive numbers — this function applies
+// the user-facing sign so the dashboard can sum them into a net total.
+export function signAccountBalance(type: AccountType, balance: number): number {
+  if (balance === 0) return 0; // avoid -0 from negating zero
+  return type === "credit" ? -balance : balance;
+}

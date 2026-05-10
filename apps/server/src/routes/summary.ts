@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { and, eq, gte, lte, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/sqlite-core";
 import { getDb } from "@moneycontrol/db";
-import { accounts, balances, budgetSettings, categories, transactions } from "@moneycontrol/db/schema";
+import { accounts, balances, budgetSettings, categories, tellerEnrollments, transactions } from "@moneycontrol/db/schema";
 import {
   aggregateTrailingIncome,
   buildHistoricalDailyCum,
@@ -21,6 +21,68 @@ export const summaryRoutes = new Hono();
 // uncategorized.
 const cat = alias(categories, "cat");
 const sub = alias(categories, "sub");
+
+// All accounts, grouped by aggregator enrollment + orphans, with net cash
+// totals. Single endpoint for the "Linked institutions" card so it doesn't
+// need to weave together /teller/enrollments + /accounts + /summary/net-cash.
+summaryRoutes.get("/accounts", async (c) => {
+  const db = getDb();
+
+  const ens = await db.select().from(tellerEnrollments);
+
+  const allAccts = await db
+    .select({
+      id: accounts.id,
+      name: accounts.name,
+      type: accounts.type,
+      institution: accounts.institution,
+      lastFour: accounts.lastFour,
+      tellerEnrollmentId: accounts.tellerEnrollmentId,
+      latestBalance: sql<number | null>`(
+        SELECT current FROM ${balances}
+        WHERE ${balances.accountId} = ${accounts.id}
+        ORDER BY ${balances.asOfDate} DESC LIMIT 1
+      )`,
+    })
+    .from(accounts);
+
+  const toDTO = (a: typeof allAccts[number]) => ({
+    id: a.id,
+    name: a.name,
+    type: a.type,
+    institution: a.institution,
+    lastFour: a.lastFour,
+    balance: a.latestBalance ?? 0,
+    // Signed balance: depository positive, credit negative.
+    signedBalance: a.type === "credit" ? -(a.latestBalance ?? 0) : (a.latestBalance ?? 0),
+  });
+
+  const groups = ens.map((en) => ({
+    kind: "teller" as const,
+    enrollmentId: en.id,
+    institutionName: en.institutionName,
+    createdAt: en.createdAt,
+    accounts: allAccts.filter((a) => a.tellerEnrollmentId === en.id).map(toDTO),
+  }));
+
+  const orphans = allAccts.filter((a) => a.tellerEnrollmentId === null);
+  if (orphans.length > 0) {
+    groups.push({
+      kind: "teller" as const,
+      enrollmentId: 0,
+      institutionName: "Unlinked accounts",
+      createdAt: "",
+      accounts: orphans.map(toDTO),
+    });
+  }
+
+  const allDtos = allAccts.map(toDTO);
+  const totalDepository = allDtos.filter((a) => a.type === "depository").reduce((s, a) => s + a.balance, 0);
+  const totalCredit = allDtos.filter((a) => a.type === "credit").reduce((s, a) => s + a.balance, 0);
+  const netCash = totalDepository - totalCredit;
+
+  return c.json({ groups, totalDepository, totalCredit, netCash });
+});
 
 // Net cash position: sum of latest depository balances minus sum of latest
 // credit balances (credit balances are stored as positive = amount owed).

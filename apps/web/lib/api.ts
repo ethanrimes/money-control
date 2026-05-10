@@ -74,6 +74,31 @@ export interface NetCash {
   }>;
 }
 
+export interface AccountDTOInGroup {
+  id: number;
+  name: string;
+  type: "depository" | "credit";
+  institution: string | null;
+  lastFour: string | null;
+  balance: number;       // raw current balance from the aggregator
+  signedBalance: number; // depository positive, credit negative
+}
+
+export interface AccountGroup {
+  kind: "teller" | "plaid" | "manual";
+  enrollmentId: number;          // 0 for orphan / manual groups
+  institutionName: string;
+  createdAt: string;
+  accounts: AccountDTOInGroup[];
+}
+
+export interface AccountsSummary {
+  groups: AccountGroup[];
+  totalDepository: number;
+  totalCredit: number;
+  netCash: number;
+}
+
 export interface SpendSeriesPoint {
   day: number;
   actual: number | null;
@@ -85,7 +110,9 @@ export interface SpendSeries {
   month: string;
   monthlyBudget: number;
   trailingMonthlyIncome: number;
+  trailingMonthlySpend: number;
   monthlySavingsTarget: number;
+  monthsObserved: number;
   points: SpendSeriesPoint[];
 }
 
@@ -174,6 +201,7 @@ export const api = {
     request<BudgetSettings>("/budget", { method: "PUT", body: JSON.stringify(body) }),
 
   netCash: () => request<NetCash>("/summary/net-cash"),
+  accountsSummary: () => request<AccountsSummary>("/summary/accounts"),
   spendSeries: (month?: string) =>
     request<SpendSeries>(`/summary/spend-series${month ? `?month=${month}` : ""}`),
   byCategory: (month?: string) =>

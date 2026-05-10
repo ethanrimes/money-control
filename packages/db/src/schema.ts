@@ -10,11 +10,14 @@ import {
 
 // Accounts (Amex, BofA Checking, Capital One, ...).
 // `teller_account_id` is null until the account is linked via Teller Connect.
+// `teller_enrollment_id` ties the account back to the institution-level link;
+// null for seeded/manual accounts that aren't backed by a live aggregator.
 export const accounts = sqliteTable(
   "accounts",
   {
     id: integer("id").primaryKey({ autoIncrement: true }),
     tellerAccountId: text("teller_account_id"),
+    tellerEnrollmentId: integer("teller_enrollment_id"),
     name: text("name").notNull(),
     type: text("type", { enum: ["depository", "credit"] }).notNull(),
     institution: text("institution"),
@@ -24,6 +27,7 @@ export const accounts = sqliteTable(
   (t) => ({
     tellerIdx: uniqueIndex("accounts_teller_idx").on(t.tellerAccountId),
     nameIdx: uniqueIndex("accounts_name_idx").on(t.name),
+    enrollmentIdx: index("accounts_enrollment_idx").on(t.tellerEnrollmentId),
   }),
 );
 

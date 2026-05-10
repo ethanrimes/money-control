@@ -41,17 +41,49 @@ tellerRoutes.get("/config", (c) => {
   });
 });
 
-// List connected enrollments. Never returns access_token.
+// List connected enrollments, each with its nested accounts + latest balance.
+// Never returns access_token. The dashboard's "Linked institutions" card is
+// the only direct consumer; we also expose the unlinked accounts (e.g. seeded
+// from the xlsx with no Teller backing yet) via /aggregator/summary.
 tellerRoutes.get("/enrollments", async (c) => {
   const db = getDb();
-  const rows = await db.select().from(tellerEnrollments);
+  const ens = await db.select().from(tellerEnrollments);
+  if (ens.length === 0) return c.json([]);
+
+  // One round-trip for all accounts; group in JS.
+  const allAccts = await db
+    .select({
+      id: accounts.id,
+      name: accounts.name,
+      type: accounts.type,
+      institution: accounts.institution,
+      lastFour: accounts.lastFour,
+      tellerEnrollmentId: accounts.tellerEnrollmentId,
+      latestBalance: sql<number | null>`(
+        SELECT current FROM ${balances}
+        WHERE ${balances.accountId} = ${accounts.id}
+        ORDER BY ${balances.asOfDate} DESC LIMIT 1
+      )`,
+    })
+    .from(accounts);
+
   return c.json(
-    rows.map((r) => ({
+    ens.map((r) => ({
       id: r.id,
       enrollmentId: r.enrollmentId,
       institutionName: r.institutionName,
       userId: r.userId,
       createdAt: r.createdAt,
+      accounts: allAccts
+        .filter((a) => a.tellerEnrollmentId === r.id)
+        .map((a) => ({
+          id: a.id,
+          name: a.name,
+          type: a.type,
+          institution: a.institution,
+          lastFour: a.lastFour,
+          latestBalance: a.latestBalance ?? 0,
+        })),
     })),
   );
 });
@@ -137,7 +169,8 @@ tellerRoutes.post("/sync", async (c) => {
   for (const en of enrollments) {
     const summary = { id: en.id, institutionName: en.institutionName, accounts: 0, balances: 0, newTransactions: 0 };
     try {
-      // 1. Accounts: upsert by teller_account_id.
+      // 1. Accounts: upsert by teller_account_id; backfill enrollment FK on
+      //    existing rows so older syncs link up.
       const tellerAccts = await listAccounts(en.accessToken);
       const accountIdByTellerId = new Map<string, number>();
       for (const a of tellerAccts) {
@@ -147,9 +180,18 @@ tellerRoutes.post("/sync", async (c) => {
           .where(eq(accounts.tellerAccountId, a.id));
         if (existing.length > 0) {
           accountIdByTellerId.set(a.id, existing[0]!.id);
+          await db
+            .update(accounts)
+            .set({
+              tellerEnrollmentId: en.id,
+              institution: a.institution?.name ?? existing[0]!.institution,
+              lastFour: a.last_four ?? existing[0]!.lastFour,
+            })
+            .where(eq(accounts.id, existing[0]!.id));
         } else {
           const newAcct: NewAccount = {
             tellerAccountId: a.id,
+            tellerEnrollmentId: en.id,
             name: a.name,
             type: a.type,
             institution: a.institution?.name ?? null,

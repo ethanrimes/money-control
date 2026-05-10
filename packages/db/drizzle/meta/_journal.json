@@ -8,6 +8,13 @@
       "when": 1778440034262,
       "tag": "0000_striped_cobalt_man",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1778446448102,
+      "tag": "0001_fantastic_mojo",
+      "breakpoints": true
     }
   ]
 }
