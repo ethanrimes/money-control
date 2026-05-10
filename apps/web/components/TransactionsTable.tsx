@@ -31,6 +31,10 @@ export function TransactionsTable({ refreshKey }: { refreshKey: number }) {
   const [textFilter, setTextFilter] = useState("");
   const [accountFilter, setAccountFilter] = useState<number | "all" | "uncategorized">("all");
   const [categoryFilter, setCategoryFilter] = useState<number | "all" | "uncategorized">("all");
+  type Period = "all" | "ytd" | "1m" | "3m" | "6m" | "custom";
+  const [period, setPeriod] = useState<Period>("all");
+  const [customFrom, setCustomFrom] = useState<string>("");
+  const [customTo, setCustomTo] = useState<string>("");
   const [sortKeys, setSortKeys] = useState<SortKey[]>([{ column: "date", direction: "desc" }]);
   const [savingId, setSavingId] = useState<number | null>(null);
   const [toast, setToast] = useState<string | null>(null);
@@ -64,7 +68,28 @@ export function TransactionsTable({ refreshKey }: { refreshKey: number }) {
     return [...seen.entries()].map(([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name));
   }, [rows]);
 
-  // Filter → sort.
+  // Resolve the selected period to a [from, to] ISO-date window. "All" =
+  // unbounded.
+  const { fromIso, toIso } = useMemo(() => {
+    const today = new Date();
+    const todayIso = today.toISOString().slice(0, 10);
+    const offsetMonths = (n: number): string => {
+      const d = new Date(today);
+      d.setMonth(d.getMonth() - n);
+      return d.toISOString().slice(0, 10);
+    };
+    switch (period) {
+      case "all": return { fromIso: null, toIso: null };
+      case "ytd": return { fromIso: `${today.getFullYear()}-01-01`, toIso: todayIso };
+      case "1m": return { fromIso: offsetMonths(1), toIso: todayIso };
+      case "3m": return { fromIso: offsetMonths(3), toIso: todayIso };
+      case "6m": return { fromIso: offsetMonths(6), toIso: todayIso };
+      case "custom": return { fromIso: customFrom || null, toIso: customTo || null };
+    }
+  }, [period, customFrom, customTo]);
+
+  // Filter → sort. All filters are client-side; we fetched up to 1000 rows
+  // up front so changing a filter doesn't refetch.
   const filteredRows = useMemo(() => {
     if (!rows) return [];
     const q = textFilter.trim().toLowerCase();
@@ -79,9 +104,11 @@ export function TransactionsTable({ refreshKey }: { refreshKey: number }) {
       } else if (categoryFilter !== "all") {
         if (r.categoryId !== categoryFilter && r.subcategoryId !== categoryFilter) return false;
       }
+      if (fromIso && r.date < fromIso) return false;
+      if (toIso && r.date > toIso) return false;
       return true;
     });
-  }, [rows, textFilter, accountFilter, categoryFilter]);
+  }, [rows, textFilter, accountFilter, categoryFilter, fromIso, toIso]);
 
   const sortedRows = useMemo(() => {
     const cmp = (a: TransactionRow, b: TransactionRow): number => {
@@ -230,6 +257,38 @@ export function TransactionsTable({ refreshKey }: { refreshKey: number }) {
             value={textFilter}
             onChange={(e) => setTextFilter(e.target.value)}
           />
+          <select
+            className="rounded-md border border-border bg-bg px-2 py-1 text-xs"
+            value={period}
+            onChange={(e) => setPeriod(e.target.value as Period)}
+            title="Filter by time period"
+          >
+            <option value="all">All time</option>
+            <option value="ytd">Year to date</option>
+            <option value="1m">Past month</option>
+            <option value="3m">Past 3 months</option>
+            <option value="6m">Past 6 months</option>
+            <option value="custom">Custom range…</option>
+          </select>
+          {period === "custom" && (
+            <>
+              <input
+                type="date"
+                className="rounded-md border border-border bg-bg px-2 py-1 text-xs"
+                value={customFrom}
+                onChange={(e) => setCustomFrom(e.target.value)}
+                title="From"
+              />
+              <span className="text-xs text-muted">→</span>
+              <input
+                type="date"
+                className="rounded-md border border-border bg-bg px-2 py-1 text-xs"
+                value={customTo}
+                onChange={(e) => setCustomTo(e.target.value)}
+                title="To"
+              />
+            </>
+          )}
           <select
             className="rounded-md border border-border bg-bg px-2 py-1 text-xs"
             value={accountFilter === "all" ? "all" : String(accountFilter)}
