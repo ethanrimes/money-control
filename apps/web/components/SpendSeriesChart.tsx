@@ -15,9 +15,6 @@ export function SpendSeriesChart({ refreshKey }: { refreshKey: number }) {
     api.spendSeries(month).then(setData).catch((e) => setErr(String(e)));
   }, [month, refreshKey]);
 
-  // Allow stepping back to past months for which we have history.
-  const monthOptions = lastNMonths(12);
-
   return (
     <Card
       title="Spending vs budget"
@@ -28,7 +25,7 @@ export function SpendSeriesChart({ refreshKey }: { refreshKey: number }) {
           value={month}
           onChange={(e) => setMonth(e.target.value)}
         >
-          {monthOptions.map((m) => <option key={m} value={m}>{m}</option>)}
+          {monthsFromJan2026ToPresent().map((m) => <option key={m} value={m}>{m}</option>)}
         </select>
       }
     >
@@ -69,14 +66,17 @@ export function SpendSeriesChart({ refreshKey }: { refreshKey: number }) {
   );
 }
 
-function lastNMonths(n: number): string[] {
+// User's data starts Jan 2026 — earlier months are empty and confusing.
+// Returns months from current month back to 2026-01, descending.
+function monthsFromJan2026ToPresent(): string[] {
   const out: string[] = [];
-  const d = new Date();
-  for (let i = 0; i < n; i++) {
-    const y = d.getFullYear();
-    const m = d.getMonth() + 1;
+  const now = new Date();
+  let y = now.getFullYear();
+  let m = now.getMonth() + 1;
+  while (y > 2026 || (y === 2026 && m >= 1)) {
     out.push(`${y}-${String(m).padStart(2, "0")}`);
-    d.setMonth(d.getMonth() - 1);
+    m--;
+    if (m === 0) { m = 12; y--; }
   }
   return out;
 }

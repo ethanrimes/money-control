@@ -5,6 +5,7 @@ import { logger } from "hono/logger";
 import { config } from "./config.js";
 import { accountsRoutes } from "./routes/accounts.js";
 import { aggregatorRoutes } from "./routes/aggregator.js";
+import { amazonRoutes } from "./routes/amazon.js";
 import { budgetRoutes } from "./routes/budget.js";
 import { categoriesRoutes } from "./routes/categories.js";
 import { importRoutes } from "./routes/import.js";
@@ -28,6 +29,7 @@ app.route("/teller", tellerRoutes);
 app.route("/plaid", plaidRoutes);
 app.route("/aggregator", aggregatorRoutes);
 app.route("/import", importRoutes);
+app.route("/import", amazonRoutes);
 
 app.onError((err, c) => {
   console.error(err);

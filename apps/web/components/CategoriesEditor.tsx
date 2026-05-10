@@ -19,6 +19,7 @@ interface FlatRow {
   // If null, the row is the parent itself; otherwise it's a subcategory.
   subcategoryId: number | null;
   subcategoryName: string | null;
+  subcategoryType: CategoryType | null;
 }
 
 export function CategoriesEditor({ refreshKey, onChange }: { refreshKey: number; onChange: () => void }) {
@@ -50,6 +51,7 @@ export function CategoriesEditor({ refreshKey, onChange }: { refreshKey: number;
           categoryType: c.type,
           subcategoryId: null,
           subcategoryName: null,
+          subcategoryType: null,
         });
       } else {
         for (const s of c.subcategories) {
@@ -59,6 +61,7 @@ export function CategoriesEditor({ refreshKey, onChange }: { refreshKey: number;
             categoryType: c.type,
             subcategoryId: s.id,
             subcategoryName: s.name,
+            subcategoryType: s.type,
           });
         }
       }
@@ -176,12 +179,21 @@ export function CategoriesEditor({ refreshKey, onChange }: { refreshKey: number;
                     )}
                   </td>
                   <td className="border-b border-border/50 py-1 pr-4">
+                    {/* Each row (category OR subcategory) has its own type.
+                        Subcategories no longer inherit from parent — the
+                        user wants per-row control (e.g. "Sergio" under
+                        Transfers should be 'expense', not 'transfer'). */}
                     <select
                       className="rounded border border-border bg-bg px-1.5 py-1 text-xs"
-                      value={r.categoryType}
-                      onChange={(e) => changeType(r.categoryId, e.target.value as CategoryType)}
-                      disabled={busy || r.subcategoryId !== null}
-                      title={r.subcategoryId !== null ? "Subcategories inherit type from their parent" : "Set category type"}
+                      value={r.subcategoryType ?? r.categoryType}
+                      onChange={(e) => changeType(
+                        r.subcategoryId ?? r.categoryId,
+                        e.target.value as CategoryType,
+                      )}
+                      disabled={busy}
+                      title={r.subcategoryId !== null
+                        ? "Set this subcategory's type (independent of parent)"
+                        : "Set category type"}
                     >
                       <option value="expense">expense</option>
                       <option value="income">income</option>

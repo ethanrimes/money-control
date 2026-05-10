@@ -231,9 +231,16 @@ tellerRoutes.post("/sync", async (c) => {
         }
       }
 
-      // 3. Transactions: pull recent, dedupe by teller_txn_id, categorize new ones.
+      // 3. Transactions: pull recent, dedupe by teller_txn_id, categorize
+      //    new ones. CRITICAL sign-flip for credit accounts: Teller returns
+      //    amounts in "balance-delta" form (a $50 purchase comes back as
+      //    +50 because it increased your amount-owed). Our schema and every
+      //    budget/spend calc assume cash-flow form (outflow = negative).
+      //    For depository accounts the two conventions already agree, so
+      //    we leave those alone.
       for (const a of tellerAccts) {
         const accountId = accountIdByTellerId.get(a.id)!;
+        const flipSign = a.type === "credit";
         try {
           const txns = await listTransactions(en.accessToken, a.id, { count: 200 });
           for (const t of txns) {
@@ -244,13 +251,14 @@ tellerRoutes.post("/sync", async (c) => {
               .limit(1);
             if (existing.length > 0) continue;
             const { categoryId, subcategoryId } = await resolveCategoryWithHeuristics(db, t.description);
+            const rawAmt = Number(t.amount);
             const row: NewTransaction = {
               tellerTxnId: t.id,
               accountId,
               date: t.date,
               description: t.description,
               rawDescription: t.description,
-              amount: Number(t.amount),
+              amount: flipSign ? -rawAmt : rawAmt,
               categoryId,
               subcategoryId,
               source: "teller",
