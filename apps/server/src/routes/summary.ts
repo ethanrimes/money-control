@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { and, eq, gte, lte, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/sqlite-core";
 import { getDb } from "@moneycontrol/db";
-import { accounts, balances, budgetSettings, categories, tellerEnrollments, transactions } from "@moneycontrol/db/schema";
+import { accounts, balances, budgetSettings, categories, plaidItems, tellerEnrollments, transactions } from "@moneycontrol/db/schema";
 import {
   aggregateTrailingIncome,
   buildHistoricalDailyCum,
@@ -28,7 +28,10 @@ const sub = alias(categories, "sub");
 summaryRoutes.get("/accounts", async (c) => {
   const db = getDb();
 
-  const ens = await db.select().from(tellerEnrollments);
+  const [tellerEns, plaidIts] = await Promise.all([
+    db.select().from(tellerEnrollments),
+    db.select().from(plaidItems),
+  ]);
 
   const allAccts = await db
     .select({
@@ -38,6 +41,7 @@ summaryRoutes.get("/accounts", async (c) => {
       institution: accounts.institution,
       lastFour: accounts.lastFour,
       tellerEnrollmentId: accounts.tellerEnrollmentId,
+      plaidItemId: accounts.plaidItemId,
       latestBalance: sql<number | null>`(
         SELECT current FROM ${balances}
         WHERE ${balances.accountId} = ${accounts.id}
@@ -53,22 +57,38 @@ summaryRoutes.get("/accounts", async (c) => {
     institution: a.institution,
     lastFour: a.lastFour,
     balance: a.latestBalance ?? 0,
-    // Signed balance: depository positive, credit negative.
     signedBalance: a.type === "credit" ? -(a.latestBalance ?? 0) : (a.latestBalance ?? 0),
   });
 
-  const groups = ens.map((en) => ({
-    kind: "teller" as const,
-    enrollmentId: en.id,
-    institutionName: en.institutionName,
-    createdAt: en.createdAt,
-    accounts: allAccts.filter((a) => a.tellerEnrollmentId === en.id).map(toDTO),
-  }));
+  type Group = {
+    kind: "teller" | "plaid" | "orphan";
+    enrollmentId: number;
+    institutionName: string;
+    createdAt: string;
+    accounts: ReturnType<typeof toDTO>[];
+  };
 
-  const orphans = allAccts.filter((a) => a.tellerEnrollmentId === null);
+  const groups: Group[] = [
+    ...tellerEns.map<Group>((en) => ({
+      kind: "teller",
+      enrollmentId: en.id,
+      institutionName: en.institutionName,
+      createdAt: en.createdAt,
+      accounts: allAccts.filter((a) => a.tellerEnrollmentId === en.id).map(toDTO),
+    })),
+    ...plaidIts.map<Group>((it) => ({
+      kind: "plaid",
+      enrollmentId: it.id,
+      institutionName: it.institutionName,
+      createdAt: it.createdAt,
+      accounts: allAccts.filter((a) => a.plaidItemId === it.id).map(toDTO),
+    })),
+  ];
+
+  const orphans = allAccts.filter((a) => a.tellerEnrollmentId === null && a.plaidItemId === null);
   if (orphans.length > 0) {
     groups.push({
-      kind: "teller" as const,
+      kind: "orphan",
       enrollmentId: 0,
       institutionName: "Unlinked accounts",
       createdAt: "",

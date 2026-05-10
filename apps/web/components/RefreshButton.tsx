@@ -1,18 +1,18 @@
 "use client";
 
 import { useState } from "react";
-import { api, type SyncResult } from "@/lib/api";
+import { api } from "@/lib/api";
 
 export function RefreshButton({ onSynced }: { onSynced: () => void }) {
   const [busy, setBusy] = useState(false);
-  const [last, setLast] = useState<SyncResult | null>(null);
+  const [last, setLast] = useState<Awaited<ReturnType<typeof api.syncAll>> | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
   async function refresh() {
     setBusy(true);
     setErr(null);
     try {
-      const r = await api.sync();
+      const r = await api.syncAll();
       setLast(r);
       onSynced();
     } catch (e) {
@@ -22,7 +22,7 @@ export function RefreshButton({ onSynced }: { onSynced: () => void }) {
     }
   }
 
-  const linked = last?.enrollments.length ?? 0;
+  const newTxns = last?.totals.transactions ?? 0;
 
   return (
     <div className="flex items-center gap-3">
@@ -37,9 +37,7 @@ export function RefreshButton({ onSynced }: { onSynced: () => void }) {
       </button>
       {last && (
         <span className="text-xs text-muted">
-          {linked === 0
-            ? "No accounts linked yet"
-            : `Synced ${linked} institution${linked === 1 ? "" : "s"} · +${last.totals.transactions} txns`}
+          Synced · +{newTxns} txn{newTxns === 1 ? "" : "s"}
         </span>
       )}
       {err && <span className="text-xs text-negative">{err}</span>}

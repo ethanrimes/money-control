@@ -4,8 +4,10 @@ import { cors } from "hono/cors";
 import { logger } from "hono/logger";
 import { config } from "./config.js";
 import { accountsRoutes } from "./routes/accounts.js";
+import { aggregatorRoutes } from "./routes/aggregator.js";
 import { budgetRoutes } from "./routes/budget.js";
 import { categoriesRoutes } from "./routes/categories.js";
+import { plaidRoutes } from "./routes/plaid.js";
 import { summaryRoutes } from "./routes/summary.js";
 import { tellerRoutes } from "./routes/teller.js";
 import { transactionsRoutes } from "./routes/transactions.js";
@@ -22,6 +24,8 @@ app.route("/categories", categoriesRoutes);
 app.route("/budget", budgetRoutes);
 app.route("/summary", summaryRoutes);
 app.route("/teller", tellerRoutes);
+app.route("/plaid", plaidRoutes);
+app.route("/aggregator", aggregatorRoutes);
 
 app.onError((err, c) => {
   console.error(err);

@@ -14,6 +14,7 @@
     "@moneycontrol/db": "*",
     "drizzle-orm": "^0.45.2",
     "hono": "^4.6.14",
+    "plaid": "^27.0.0",
     "undici": "^7.2.0"
   },
   "devDependencies": {

@@ -13,6 +13,7 @@ import {
 } from "@/lib/api";
 import { Card } from "./Card";
 import { LinkAccountButton } from "./LinkAccountButton";
+import { PlaidLinkButton } from "./PlaidLinkButton";
 
 export function LinkedAccountsCard({
   refreshKey,
@@ -30,10 +31,11 @@ export function LinkedAccountsCard({
     api.tellerConfig().then(setConfig).catch(() => {});
   }, [refreshKey]);
 
-  async function disconnect(enrollmentId: number, name: string) {
-    if (enrollmentId === 0) return; // orphan group has no enrollment to disconnect
-    if (!confirm(`Disconnect ${name}? Past transactions stay in the DB; future syncs will skip this institution.`)) return;
-    await api.deleteEnrollment(enrollmentId);
+  async function disconnect(group: AccountsSummary["groups"][number]) {
+    if (group.enrollmentId === 0) return; // orphans aren't disconnectable
+    if (!confirm(`Disconnect ${group.institutionName}? Past transactions stay in the DB; future syncs will skip this institution.`)) return;
+    if (group.kind === "plaid") await api.plaidDeleteItem(group.enrollmentId);
+    else await api.deleteEnrollment(group.enrollmentId);
     onChange();
   }
 
@@ -42,7 +44,15 @@ export function LinkedAccountsCard({
   const orphanGroup = summary?.groups.find((g) => g.enrollmentId === 0);
 
   return (
-    <Card title="Accounts" action={<LinkAccountButton onLinked={onChange} />}>
+    <Card
+      title="Accounts"
+      action={
+        <div className="flex flex-wrap items-center gap-2">
+          <PlaidLinkButton onLinked={onChange} />
+          <LinkAccountButton onLinked={onChange} />
+        </div>
+      }
+    >
       {err && <div className="mb-3 text-sm text-negative">{err}</div>}
 
       {showSetupHint && (
@@ -73,10 +83,11 @@ export function LinkedAccountsCard({
         <div className="space-y-4">
           {linkedGroups.map((g) => (
             <InstitutionBlock
-              key={g.enrollmentId}
+              key={`${g.kind}-${g.enrollmentId}`}
               name={g.institutionName}
+              badge={g.kind === "plaid" ? "Plaid" : g.kind === "teller" ? "Teller" : undefined}
               accounts={g.accounts}
-              onDisconnect={() => disconnect(g.enrollmentId, g.institutionName)}
+              onDisconnect={() => disconnect(g)}
             />
           ))}
           {orphanGroup && orphanGroup.accounts.length > 0 && (
@@ -111,16 +122,25 @@ function InstitutionBlock({
   accounts,
   onDisconnect,
   subtle = false,
+  badge,
 }: {
   name: string;
   accounts: AccountsSummary["groups"][number]["accounts"];
   onDisconnect?: () => void;
   subtle?: boolean;
+  badge?: string;
 }) {
   return (
     <div>
       <div className="mb-2 flex items-center justify-between">
-        <div className={`text-sm font-medium ${subtle ? "text-muted" : "text-text"}`}>{name}</div>
+        <div className="flex items-center gap-2">
+          <div className={`text-sm font-medium ${subtle ? "text-muted" : "text-text"}`}>{name}</div>
+          {badge && (
+            <span className="rounded bg-bg px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-muted">
+              {badge}
+            </span>
+          )}
+        </div>
         {onDisconnect && (
           <button
             onClick={onDisconnect}

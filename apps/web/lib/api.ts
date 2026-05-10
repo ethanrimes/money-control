@@ -219,6 +219,18 @@ export const api = {
     }),
   deleteEnrollment: (id: number) =>
     request<{ ok: boolean }>(`/teller/enrollments/${id}`, { method: "DELETE" }),
+
+  plaidConfig: () => request<{ env: "sandbox" | "production"; configured: boolean }>("/plaid/config"),
+  plaidLinkToken: () => request<{ linkToken: string; expiration: string }>("/plaid/link-token", { method: "POST" }),
+  plaidCreateItem: (publicToken: string, metadata: { institution?: { name?: string; institution_id?: string } }) =>
+    request<{ id: number; status: "created" | "updated" }>("/plaid/items", {
+      method: "POST",
+      body: JSON.stringify({ publicToken, metadata }),
+    }),
+  plaidDeleteItem: (id: number) =>
+    request<{ ok: boolean }>(`/plaid/items/${id}`, { method: "DELETE" }),
+
+  syncAll: () => request<{ teller: unknown; plaid: unknown; totals: { accounts: number; balances: number; transactions: number }; syncedAt: string }>("/aggregator/sync", { method: "POST" }),
 };
 
 // ---------- Helpers ----------

@@ -15,6 +15,13 @@
       "when": 1778446448102,
       "tag": "0001_fantastic_mojo",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1778446734646,
+      "tag": "0002_last_mojo",
+      "breakpoints": true
     }
   ]
 }
