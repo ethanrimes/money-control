@@ -1,0 +1,8 @@
+{
+  "name": "@moneycontrol/mobile",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "start": "echo \"Phase 4: Expo will be installed here\""
+  }
+}

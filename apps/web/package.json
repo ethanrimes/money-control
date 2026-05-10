@@ -1,0 +1,8 @@
+{
+  "name": "@moneycontrol/web",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "echo \"Phase 3: Next.js will be installed here\""
+  }
+}

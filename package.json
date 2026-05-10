@@ -1,0 +1,26 @@
+{
+  "name": "money-control",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Personal finance control plane: web + mobile dashboards over Teller bank data.",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "db:generate": "npm run -w @moneycontrol/db generate",
+    "db:migrate": "npm run -w @moneycontrol/db migrate",
+    "db:studio": "npm run -w @moneycontrol/db studio",
+    "db:seed": "npm run -w @moneycontrol/db seed",
+    "dev:server": "npm run -w @moneycontrol/server dev",
+    "dev:web": "npm run -w @moneycontrol/web dev",
+    "dev:mobile": "npm run -w @moneycontrol/mobile start",
+    "typecheck": "npm run -ws --if-present typecheck"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.3"
+  }
+}
