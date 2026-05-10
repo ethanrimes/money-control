@@ -43,10 +43,14 @@ summaryRoutes.get("/accounts", async (c) => {
       lastFour: accounts.lastFour,
       tellerEnrollmentId: accounts.tellerEnrollmentId,
       plaidItemId: accounts.plaidItemId,
+      // Explicit table-qualified column names: Drizzle's sql template
+      // does NOT auto-prefix outer-scope columns inside a correlated
+      // subquery — without "accounts.id" the bare "id" resolves to
+      // balances.id and the subquery never matches.
       latestBalance: sql<number | null>`(
-        SELECT current FROM ${balances}
-        WHERE ${balances.accountId} = ${accounts.id}
-        ORDER BY ${balances.asOfDate} DESC LIMIT 1
+        SELECT b.current FROM balances b
+        WHERE b.account_id = accounts.id
+        ORDER BY b.as_of_date DESC LIMIT 1
       )`,
     })
     .from(accounts);
@@ -141,9 +145,9 @@ summaryRoutes.get("/net-cash", async (c) => {
       name: accounts.name,
       type: accounts.type,
       latestBalance: sql<number | null>`(
-        SELECT current FROM ${balances}
-        WHERE ${balances.accountId} = ${accounts.id}
-        ORDER BY ${balances.asOfDate} DESC LIMIT 1
+        SELECT b.current FROM balances b
+        WHERE b.account_id = accounts.id
+        ORDER BY b.as_of_date DESC LIMIT 1
       )`,
     })
     .from(accounts);

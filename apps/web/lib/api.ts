@@ -245,6 +245,12 @@ export const api = {
     request<{ ok: boolean }>(`/plaid/items/${id}`, { method: "DELETE" }),
 
   syncAll: () => request<{ teller: unknown; plaid: unknown; totals: { accounts: number; balances: number; transactions: number }; syncedAt: string }>("/aggregator/sync", { method: "POST" }),
+
+  setAccountBalance: (accountId: number, current: number, available?: number | null) =>
+    request<{ ok: boolean }>(`/accounts/${accountId}/balance`, {
+      method: "PATCH",
+      body: JSON.stringify({ current, available: available ?? null }),
+    }),
 };
 
 // ---------- Helpers ----------

@@ -26,7 +26,14 @@ import {
 } from "../src/schema.js";
 
 const repoRoot = path.resolve(import.meta.dirname, "../../..");
-const xlsxPath = path.join(repoRoot, "unified_statements_v2.xlsx");
+// xlsx lives in csv/ (moved there alongside the bank CSV exports). Falls
+// back to the repo root for legacy callers.
+import fs from "node:fs";
+const xlsxCandidates = [
+  path.join(repoRoot, "csv", "unified_statements_v2.xlsx"),
+  path.join(repoRoot, "unified_statements_v2.xlsx"),
+];
+const xlsxPath = xlsxCandidates.find((p) => fs.existsSync(p)) ?? xlsxCandidates[0];
 
 const ACCOUNT_TYPES: Record<string, "credit" | "depository"> = {
   "Amex": "credit",
@@ -268,7 +275,54 @@ async function main() {
   }
   console.log(`categorization rules: ${ruleMap.size}`);
 
-  console.log("seed complete");
+  // Backfill: walk every currently-uncategorized transaction in the DB (any
+  // source — teller, plaid, manual, even pre-existing excel rows that came
+  // in as #N/A) and try to apply BOTH the freshly-rebuilt rules AND the
+  // transfer heuristics. Rules typically miss because aggregator wording
+  // differs from xlsx wording; the heuristics catch obvious cross-vendor
+  // patterns (internet transfers, Wise, Amex EPAYMENT, etc.). Anything
+  // still uncategorized after this can be labeled in the UI to grow the
+  // rule table.
+  const { resolveCategoryWithHeuristics } = await import(
+    "../../../apps/server/src/lib/categorize.js"
+  );
+  console.log("\nbackfilling rules + heuristics onto existing uncategorized transactions…");
+  const uncat = await db
+    .select({ id: transactions.id, description: transactions.description })
+    .from(transactions)
+    .where(isNull(transactions.categoryId));
+  let backfilledByRule = 0;
+  let backfilledByHeuristic = 0;
+  const nowIso = new Date().toISOString();
+  for (const t of uncat) {
+    const key = normalize(t.description);
+    const ruleHit = ruleMap.get(key);
+    let categoryId: number | null = null;
+    let subcategoryId: number | null = null;
+    let viaRule = false;
+    if (ruleHit && ruleHit.categoryId !== null) {
+      categoryId = ruleHit.categoryId;
+      subcategoryId = ruleHit.subcategoryId;
+      viaRule = true;
+    } else {
+      const h = await resolveCategoryWithHeuristics(db, t.description);
+      if (h.categoryId === null) continue;
+      categoryId = h.categoryId;
+      subcategoryId = h.subcategoryId;
+    }
+    await db.update(transactions).set({
+      categoryId,
+      subcategoryId,
+      updatedAt: nowIso,
+    }).where(eq(transactions.id, t.id));
+    if (viaRule) backfilledByRule++;
+    else backfilledByHeuristic++;
+  }
+  console.log(`  by exact rule:  ${backfilledByRule}`);
+  console.log(`  by heuristics:  ${backfilledByHeuristic}`);
+  console.log(`  still uncategorized: ${uncat.length - backfilledByRule - backfilledByHeuristic}`);
+
+  console.log("\nseed complete");
 }
 
 await main();

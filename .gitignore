@@ -24,6 +24,9 @@ unified_statements_v2.xlsx
 unified_statements*.xlsx
 *.csv
 !example*.csv
+# CSV exports, statement xlsx, Amazon order PDFs, etc. — none of this is
+# code; keep the whole folder local.
+csv/
 
 # local data
 data/
