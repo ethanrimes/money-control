@@ -2,6 +2,7 @@
 node_modules/
 .pnpm-store/
 pastes/
+scratch.md
 
 # build output
 dist/
