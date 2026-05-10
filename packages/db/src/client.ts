@@ -2,6 +2,7 @@ import { DatabaseSync, type StatementResultingChanges } from "node:sqlite";
 import { drizzle } from "drizzle-orm/sqlite-proxy";
 import fs from "node:fs";
 import path from "node:path";
+import { aliasSelectColumns } from "./sql-rewrite.js";
 import * as schema from "./schema.js";
 
 let _sqlite: DatabaseSync | null = null;
@@ -28,22 +29,38 @@ function openSqlite(): DatabaseSync {
 // node:sqlite returns row objects; convert them to arrays in column order.
 async function executeQuery(sql: string, params: unknown[], method: "all" | "run" | "get" | "values") {
   const sqlite = openSqlite();
-  const stmt = sqlite.prepare(sql);
 
   if (method === "run") {
+    const stmt = sqlite.prepare(sql);
     const info: StatementResultingChanges = stmt.run(...(params as never[]));
     return { rows: [[Number(info.lastInsertRowid), info.changes]] };
   }
 
-  // .all() returns [{col: val, ...}, ...]; sqlite-proxy expects rows as arrays.
+  // SELECT path: rewrite outermost SELECT to add positional column aliases so
+  // duplicate column names (e.g. multiple joined tables with `name`) don't
+  // collapse in node:sqlite's row-as-object representation.
+  const aliased = aliasSelectColumns(sql);
+  if (process.env.DRIZZLE_DEBUG) console.error("[drizzle-proxy]", method, "\n  in:", sql, "\n  out:", aliased);
+  const stmt = sqlite.prepare(aliased);
   const objs = stmt.all(...(params as never[])) as Array<Record<string, unknown>>;
   if (objs.length === 0) return { rows: [] };
 
-  const cols = Object.keys(objs[0]!);
-  const rows = objs.map((o) => cols.map((c) => o[c]));
+  // Sort keys by their _cN ordinal so values come back in SELECT order even
+  // if the runtime emits them in some other ordering.
+  const keys = Object.keys(objs[0]!).sort((a, b) => {
+    const ai = parseAliasOrdinal(a);
+    const bi = parseAliasOrdinal(b);
+    return ai - bi;
+  });
+  const rows = objs.map((o) => keys.map((k) => o[k]));
 
   if (method === "get") return { rows: rows[0] ?? [] };
   return { rows };
+}
+
+function parseAliasOrdinal(key: string): number {
+  const m = key.match(/^_c(\d+)$/);
+  return m ? Number(m[1]) : Number.POSITIVE_INFINITY;
 }
 
 export function getDb() {

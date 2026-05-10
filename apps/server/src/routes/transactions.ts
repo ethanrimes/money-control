@@ -1,10 +1,16 @@
 import { Hono } from "hono";
-import { and, desc, eq, gte, lte, sql } from "drizzle-orm";
+import { and, desc, eq, gte, lte } from "drizzle-orm";
+import { alias } from "drizzle-orm/sqlite-core";
 import { getDb } from "@moneycontrol/db";
 import { transactions, accounts, categories } from "@moneycontrol/db/schema";
 import { upsertRule } from "../lib/categorize.js";
 
 export const transactionsRoutes = new Hono();
+
+// Aliases keep the two joins on `categories` from colliding on column names
+// (`name`, `id`, etc.) when the proxy adapter materializes rows.
+const cat = alias(categories, "cat");
+const sub = alias(categories, "sub");
 
 // GET /transactions?from=YYYY-MM-DD&to=YYYY-MM-DD&accountId=&categoryId=&limit=100&offset=0
 transactionsRoutes.get("/", async (c) => {
@@ -18,8 +24,6 @@ transactionsRoutes.get("/", async (c) => {
   const limit = Math.min(Number(q.limit ?? 200), 1000);
   const offset = Number(q.offset ?? 0);
 
-  const cat = sql.raw("c1");
-  const sub = sql.raw("c2");
   const rows = await db
     .select({
       id: transactions.id,
@@ -29,16 +33,16 @@ transactionsRoutes.get("/", async (c) => {
       accountId: transactions.accountId,
       accountName: accounts.name,
       categoryId: transactions.categoryId,
-      categoryName: sql<string | null>`${cat}.name`,
+      categoryName: cat.name,
       subcategoryId: transactions.subcategoryId,
-      subcategoryName: sql<string | null>`${sub}.name`,
+      subcategoryName: sub.name,
       source: transactions.source,
       notes: transactions.notes,
     })
     .from(transactions)
     .leftJoin(accounts, eq(accounts.id, transactions.accountId))
-    .leftJoin(sql`${categories} as c1`, sql`c1.id = ${transactions.categoryId}`)
-    .leftJoin(sql`${categories} as c2`, sql`c2.id = ${transactions.subcategoryId}`)
+    .leftJoin(cat, eq(cat.id, transactions.categoryId))
+    .leftJoin(sub, eq(sub.id, transactions.subcategoryId))
     .where(filters.length ? and(...filters) : undefined)
     .orderBy(desc(transactions.date), desc(transactions.id))
     .limit(limit)
@@ -71,7 +75,6 @@ transactionsRoutes.patch("/:id", async (c) => {
 
   await db.update(transactions).set(update).where(eq(transactions.id, id));
 
-  // If category changed, persist the learned mapping.
   if ("categoryId" in body || "subcategoryId" in body) {
     await upsertRule(db, {
       description: txn.description,

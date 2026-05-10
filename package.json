@@ -15,7 +15,8 @@
     "dev:server": "npm run -w @moneycontrol/server dev",
     "dev:web": "npm run -w @moneycontrol/web dev",
     "dev:mobile": "npm run -w @moneycontrol/mobile start",
-    "typecheck": "npm run -ws --if-present typecheck"
+    "typecheck": "npm run -ws --if-present typecheck",
+    "test": "npm run -ws --if-present test"
   },
   "engines": {
     "node": ">=20"
