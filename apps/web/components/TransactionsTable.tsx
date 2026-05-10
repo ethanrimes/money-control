@@ -39,6 +39,10 @@ export function TransactionsTable({ refreshKey }: { refreshKey: number }) {
   const [savingId, setSavingId] = useState<number | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Multi-select: a Set of transaction ids. Action bar appears when non-empty.
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [bulkCategoryValue, setBulkCategoryValue] = useState<string>("");
+  const [bulkSaving, setBulkSaving] = useState(false);
 
   // Drag-fill state. While the user drags, `fillSource` is the row whose
   // category we'll propagate; `fillHoverIndex` is the bottom of the highlight
@@ -216,6 +220,66 @@ export function TransactionsTable({ refreshKey }: { refreshKey: number }) {
     };
   }, [fillSource, endDragFill]);
 
+  function toggleSelected(id: number, shiftKey: boolean, allFilteredIds: number[]) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      // Plain click: toggle one. Shift-click: also extends from the last
+      // selected to this one (Excel-like range select).
+      if (shiftKey && next.size > 0) {
+        const lastSelected = [...next].pop()!;
+        const a = allFilteredIds.indexOf(lastSelected);
+        const b = allFilteredIds.indexOf(id);
+        if (a >= 0 && b >= 0) {
+          const [lo, hi] = a < b ? [a, b] : [b, a];
+          for (let i = lo; i <= hi; i++) next.add(allFilteredIds[i]!);
+          return next;
+        }
+      }
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function selectAllVisible(allFilteredIds: number[], on: boolean) {
+    if (on) setSelected(new Set(allFilteredIds));
+    else setSelected(new Set());
+  }
+
+  async function applyBulkCategory() {
+    if (selected.size === 0) return;
+    if (bulkCategoryValue === "") {
+      // "uncategorized" — set to null
+    }
+    setBulkSaving(true);
+    try {
+      let categoryId: number | null = null;
+      let subcategoryId: number | null = null;
+      if (bulkCategoryValue !== "") {
+        const id = Number(bulkCategoryValue);
+        const opt = catOptions.find((o) => o.id === id);
+        if (!opt) { setBulkSaving(false); return; }
+        categoryId = opt.parentId ?? id;
+        subcategoryId = opt.parentId === null ? null : id;
+      }
+      const ids = [...selected];
+      const res = await api.bulkPatchTransactions({ ids, categoryId, subcategoryId });
+      const total = res.updated + res.backfillCount;
+      showToast(
+        `Categorized ${res.updated} selected${res.backfillCount > 0 ? ` + auto-applied to ${res.backfillCount} more` : ""}.`,
+      );
+      void total;
+      setSelected(new Set());
+      setBulkCategoryValue("");
+      const fresh = await api.transactions({ limit: 1000 });
+      setRows(fresh);
+    } catch (e) {
+      alert(`Bulk save failed: ${e}`);
+    } finally {
+      setBulkSaving(false);
+    }
+  }
+
   async function saveCategory(txId: number, value: string) {
     if (!cats) return;
     setSavingId(txId);
@@ -329,12 +393,49 @@ export function TransactionsTable({ refreshKey }: { refreshKey: number }) {
             </div>
           )}
           <div className="text-[11px] text-muted/80 mb-2">
-            Click a column header to sort. Shift-click to add a secondary sort.
+            Click a column header to sort. Shift-click a header to add a secondary sort.
+            Click a row's checkbox to select; shift-click another to extend the range.
           </div>
+          {selected.size > 0 && (
+            <div className="sticky top-0 z-20 mb-2 flex flex-wrap items-center gap-2 rounded-md border border-accent/40 bg-accent/10 px-3 py-2 text-sm">
+              <span className="font-medium">{selected.size} selected</span>
+              <span className="text-muted">·</span>
+              <select
+                className="rounded border border-border bg-bg px-2 py-1 text-xs"
+                value={bulkCategoryValue}
+                onChange={(e) => setBulkCategoryValue(e.target.value)}
+              >
+                <option value="">— uncategorized —</option>
+                {catOptions.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
+              </select>
+              <button
+                onClick={applyBulkCategory}
+                disabled={bulkSaving}
+                className="rounded-md bg-accent px-3 py-1 text-xs font-medium text-white disabled:opacity-60"
+              >
+                {bulkSaving ? "Applying…" : "Apply"}
+              </button>
+              <button
+                onClick={() => setSelected(new Set())}
+                className="rounded-md border border-border px-3 py-1 text-xs"
+              >
+                Clear
+              </button>
+            </div>
+          )}
           <div className="overflow-x-auto">
             <table className="w-full border-collapse text-sm">
               <thead>
                 <tr className="text-left text-xs text-muted">
+                  <th className="border-b border-border py-2 pr-2 font-medium">
+                    <input
+                      type="checkbox"
+                      className="cursor-pointer accent-accent"
+                      checked={sortedRows.length > 0 && selected.size === sortedRows.length}
+                      onChange={(e) => selectAllVisible(sortedRows.map((r) => r.id), e.target.checked)}
+                      title="Select all visible rows"
+                    />
+                  </th>
                   {COLS.map((col) => {
                     const idx = sortKeys.findIndex((k) => k.column === col.id);
                     const key = idx >= 0 ? sortKeys[idx]! : null;
@@ -368,12 +469,31 @@ export function TransactionsTable({ refreshKey }: { refreshKey: number }) {
                   const previewLabel = inFillRange && r.id !== fillSource?.rowId
                     ? (fillValue === "" ? "— uncategorized —" : catOptions.find((o) => o.id === Number(fillValue))?.label ?? "")
                     : null;
+                  const isChecked = selected.has(r.id);
                   return (
                     <tr
                       key={r.id}
                       data-row-index={rowIndex}
-                      className={`hover:bg-bg/60 ${inFillRange ? "bg-accent/5" : ""}`}
+                      className={`hover:bg-bg/60 ${inFillRange ? "bg-accent/5" : ""} ${isChecked ? "bg-accent/10" : ""}`}
                     >
+                      <td className="border-b border-border/50 py-2 pr-2">
+                        <input
+                          type="checkbox"
+                          className="cursor-pointer accent-accent"
+                          checked={isChecked}
+                          onChange={(e) => {
+                            const me = e.nativeEvent as MouseEvent;
+                            toggleSelected(r.id, me.shiftKey ?? false, sortedRows.map((x) => x.id));
+                          }}
+                          onClick={(e) => {
+                            // Capture shift state — the change event doesn't expose it.
+                            if (e.shiftKey) {
+                              e.preventDefault();
+                              toggleSelected(r.id, true, sortedRows.map((x) => x.id));
+                            }
+                          }}
+                        />
+                      </td>
                       <td className="border-b border-border/50 py-2 pr-4 text-muted tabular">{r.date}</td>
                       <td className="border-b border-border/50 py-2 pr-4">
                         {r.description}

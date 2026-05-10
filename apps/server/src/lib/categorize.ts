@@ -235,8 +235,18 @@ export async function resolveCategoryWithHeuristics(
   const ruleHit = await resolveCategory(db, description);
   if (ruleHit.categoryId !== null) return ruleHit;
 
-  // Transfer patterns
+  // Transfer patterns — prefer routing into "Card payment/account transfer"
+  // subcategory (if the user has set it up); fall back to the top-level
+  // transfer category for older DBs where the sub doesn't exist yet.
   if (looksLikeTransfer(description)) {
+    const cardSub = (await db
+      .select()
+      .from(categories)
+      .where(eq(categories.name, "Card payment/account transfer"))
+      .limit(1))[0];
+    if (cardSub) {
+      return { categoryId: cardSub.parentId, subcategoryId: cardSub.id, ruleId: null };
+    }
     const transferCat = (await db
       .select()
       .from(categories)
