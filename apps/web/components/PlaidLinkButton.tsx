@@ -5,7 +5,7 @@
 // exchanges and persists the access_token.
 
 import { useCallback, useEffect, useState } from "react";
-import { usePlaidLink, type PlaidLinkOnSuccessMetadata } from "react-plaid-link";
+import { usePlaidLink, type PlaidLinkOnExitMetadata, type PlaidLinkOnSuccessMetadata, type PlaidLinkError } from "react-plaid-link";
 import { api } from "@/lib/api";
 
 export function PlaidLinkButton({ onLinked }: { onLinked: () => void }) {
@@ -40,12 +40,28 @@ export function PlaidLinkButton({ onLinked }: { onLinked: () => void }) {
     }
   }, [onLinked]);
 
+  const onExit = useCallback((error: PlaidLinkError | null, metadata: PlaidLinkOnExitMetadata) => {
+    setBusy(false);
+    // Don't surface "user clicked X" as an error.
+    if (!error) return;
+    // Plaid gives us structured error info — surface it so we can debug
+    // institution-specific failures (e.g. unsupported product, OAuth flow
+    // mismatch) instead of just "Something went wrong."
+    const detail = [
+      error.error_code,
+      error.error_message,
+      metadata.institution?.name ? `at ${metadata.institution.name}` : "",
+      metadata.status ? `(${metadata.status})` : "",
+    ].filter(Boolean).join(" — ");
+    setStatus({ kind: "error", msg: detail || "Plaid Link failed" });
+  }, []);
+
   // usePlaidLink wants linkToken from the start. If it's null we render a
   // disabled button that fetches a fresh token when clicked, then opens.
   const { open, ready } = usePlaidLink({
     token: linkToken,
     onSuccess,
-    onExit: () => setBusy(false),
+    onExit,
   });
 
   async function handleClick() {

@@ -32,6 +32,14 @@ export function getPlaid(): PlaidApi {
   return _client;
 }
 
-// Products we ask for during Link. Investments lets us pull Fidelity holdings;
-// auth + transactions cover the Amex deposit case (auth gates depository link).
-export const LINK_PRODUCTS: Products[] = ["transactions" as Products, "auth" as Products];
+// Products we ask Plaid Link to enable. Keep this list MINIMAL — Plaid
+// errors out with "Internal error" if you require a product the chosen
+// institution doesn't support. Specifically `auth` (ACH routing numbers)
+// must NOT be required: Amex credit cards don't expose routing numbers
+// and Amex deposit OAuth handles auth differently — including it breaks
+// the Amex flow.
+//
+// For balances + transactions + later investments, `transactions` alone is
+// sufficient. The /accounts/balance/get endpoint we call in /plaid/sync
+// works against any account regardless of the products you linked with.
+export const LINK_PRODUCTS: Products[] = ["transactions" as Products];
