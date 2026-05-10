@@ -194,7 +194,9 @@ export const api = {
     return request<TransactionRow[]>(`/transactions${qs ? `?${qs}` : ""}`);
   },
   patchTransaction: (id: number, body: { categoryId?: number | null; subcategoryId?: number | null; notes?: string | null }) =>
-    request<TransactionRow>(`/transactions/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
+    request<TransactionRow & { backfillCount: number }>(`/transactions/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
+  bulkPatchTransactions: (body: { ids: number[]; categoryId: number | null; subcategoryId?: number | null }) =>
+    request<{ updated: number; backfillCount: number }>(`/transactions`, { method: "PATCH", body: JSON.stringify(body) }),
 
   budget: () => request<BudgetSettings | null>("/budget"),
   putBudget: (body: { monthlySavingsTarget: number; effectiveFrom?: string }) =>

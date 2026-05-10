@@ -2,8 +2,8 @@
 // the rule's hit-count for visibility. Used by both the sync path (Teller
 // ingest) and the manual-create path.
 
-import { and, eq, like, sql, desc } from "drizzle-orm";
-import { categorizationRules, type NewCategorizationRule } from "@moneycontrol/db/schema";
+import { and, desc, eq, isNull, sql } from "drizzle-orm";
+import { categorizationRules, transactions, type NewCategorizationRule } from "@moneycontrol/db/schema";
 import { normalizeDescription } from "@moneycontrol/core";
 import type { getDb } from "@moneycontrol/db";
 
@@ -98,4 +98,52 @@ export async function upsertRule(
 // (lowercase, alnum + few punctuation), but be defensive anyway.
 function escapeLiteral(s: string): string {
   return s.replace(/'/g, "''");
+}
+
+// Apply (categoryId, subcategoryId) to every UNCATEGORIZED transaction whose
+// normalized description matches `description`'s normalized form. Returns the
+// number of rows touched. Skips `excludeId` so the caller's just-updated row
+// isn't double-counted.
+//
+// Called from PATCH /transactions/:id — if the user re-labels one Wise
+// transfer, every other uncategorized Wise transfer auto-labels too.
+//
+// NOTE: we filter candidates by `categoryId IS NULL` in SQL (cheap), but the
+// normalized-description match happens in JS — descriptions aren't stored
+// normalized, and computing the same regex on every row in SQLite would
+// require a UDF. For a personal-finance DB this is comfortably fast.
+export async function backfillRule(
+  db: Db,
+  args: {
+    description: string;
+    categoryId: number | null;
+    subcategoryId: number | null;
+    excludeId: number;
+  },
+): Promise<number> {
+  const key = normalizeDescription(args.description);
+  if (!key) return 0;
+
+  const candidates = await db
+    .select({ id: transactions.id, description: transactions.description })
+    .from(transactions)
+    .where(isNull(transactions.categoryId));
+
+  const matches = candidates.filter(
+    (t) => t.id !== args.excludeId && normalizeDescription(t.description) === key,
+  );
+  if (matches.length === 0) return 0;
+
+  const nowIso = new Date().toISOString();
+  for (const m of matches) {
+    await db
+      .update(transactions)
+      .set({
+        categoryId: args.categoryId,
+        subcategoryId: args.subcategoryId,
+        updatedAt: nowIso,
+      })
+      .where(eq(transactions.id, m.id));
+  }
+  return matches.length;
 }

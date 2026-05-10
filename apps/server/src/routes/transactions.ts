@@ -3,7 +3,7 @@ import { and, desc, eq, gte, lte } from "drizzle-orm";
 import { alias } from "drizzle-orm/sqlite-core";
 import { getDb } from "@moneycontrol/db";
 import { transactions, accounts, categories } from "@moneycontrol/db/schema";
-import { upsertRule } from "../lib/categorize.js";
+import { backfillRule, upsertRule } from "../lib/categorize.js";
 
 export const transactionsRoutes = new Hono();
 
@@ -75,14 +75,82 @@ transactionsRoutes.patch("/:id", async (c) => {
 
   await db.update(transactions).set(update).where(eq(transactions.id, id));
 
+  let backfillCount = 0;
   if ("categoryId" in body || "subcategoryId" in body) {
+    const newCategoryId = (update.categoryId as number | null) ?? null;
+    const newSubcategoryId = (update.subcategoryId as number | null) ?? null;
     await upsertRule(db, {
       description: txn.description,
-      categoryId: (update.categoryId as number | null) ?? null,
-      subcategoryId: (update.subcategoryId as number | null) ?? null,
+      categoryId: newCategoryId,
+      subcategoryId: newSubcategoryId,
     });
+    // Apply the same categorization to any other UNCATEGORIZED transactions
+    // whose normalized description matches — so labeling one Wise transfer
+    // cascades through them all.
+    if (newCategoryId !== null) {
+      backfillCount = await backfillRule(db, {
+        description: txn.description,
+        categoryId: newCategoryId,
+        subcategoryId: newSubcategoryId,
+        excludeId: id,
+      });
+    }
   }
 
   const after = await db.select().from(transactions).where(eq(transactions.id, id)).limit(1);
-  return c.json(after[0]);
+  return c.json({ ...after[0], backfillCount });
+});
+
+// Bulk PATCH: apply the same category to many transactions in one call.
+// Drives the drag-fill flow in the UI (next commit).
+//   Body: { ids: number[], categoryId: number|null, subcategoryId?: number|null }
+transactionsRoutes.patch("/", async (c) => {
+  const body = await c.req.json().catch(() => ({})) as {
+    ids?: number[];
+    categoryId?: number | null;
+    subcategoryId?: number | null;
+  };
+  if (!Array.isArray(body.ids) || body.ids.length === 0) {
+    return c.json({ error: "ids[] required" }, 400);
+  }
+  if (!("categoryId" in body)) {
+    return c.json({ error: "categoryId required" }, 400);
+  }
+  const ids = body.ids.filter((n): n is number => Number.isInteger(n));
+  const db = getDb();
+  const nowIso = new Date().toISOString();
+
+  let updated = 0;
+  let backfillCount = 0;
+  // We deliberately walk one row at a time so we can also (a) upsert the
+  // rule from the FIRST row's description and (b) backfill matching
+  // uncategorized rows. The per-row update cost is cheap on SQLite.
+  let ruleUpserted = false;
+  for (const id of ids) {
+    const before = (await db.select().from(transactions).where(eq(transactions.id, id)).limit(1))[0];
+    if (!before) continue;
+    await db.update(transactions).set({
+      categoryId: body.categoryId ?? null,
+      subcategoryId: body.subcategoryId ?? null,
+      updatedAt: nowIso,
+    }).where(eq(transactions.id, id));
+    updated++;
+    // Learn from the first row only — subsequent rows in the same drag
+    // typically share the description, so one rule covers them all.
+    if (!ruleUpserted && body.categoryId !== null) {
+      await upsertRule(db, {
+        description: before.description,
+        categoryId: body.categoryId ?? null,
+        subcategoryId: body.subcategoryId ?? null,
+      });
+      backfillCount = await backfillRule(db, {
+        description: before.description,
+        categoryId: body.categoryId ?? null,
+        subcategoryId: body.subcategoryId ?? null,
+        excludeId: id,
+      });
+      ruleUpserted = true;
+    }
+  }
+  return c.json({ updated, backfillCount });
 });

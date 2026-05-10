@@ -107,3 +107,54 @@ test("resolveCategory: normalizes punctuation/case so casing doesn't miss the ru
     try { fs.unlinkSync(tmpDbPath); } catch { /* ignore */ }
   });
 });
+
+test("backfillRule: labels every uncategorized matching transaction, leaves others alone", async (t) => {
+  const { db } = await freshDb();
+  const { accounts, categories, transactions } = await import("../src/schema.js");
+  const { backfillRule } = await import("../../../apps/server/src/lib/categorize.js");
+
+  // 1 account, 1 expense category, 1 transfer category.
+  const acct = (await db.insert(accounts).values({ name: "Test", type: "depository" }).returning())[0]!;
+  const cats = await db.insert(categories).values([
+    { name: "Transfers", parentId: null, type: "transfer" },
+    { name: "Dining", parentId: null, type: "expense" },
+  ]).returning();
+  const transferCatId = cats[0]!.id;
+  const diningCatId = cats[1]!.id;
+
+  // Seed 5 transactions. Descriptions chosen so the first 3 all normalize to
+  // the same key ("wise transfer ref"), while w4 + w5 don't.
+  //   - 3 uncategorized "Wise Transfer ref ..." with differing long refnos
+  //     (normalize strips 6+ digit runs → identical keys)
+  //   - 1 already-categorized w/ matching description → should NOT be touched
+  //   - 1 unrelated "Starbucks" uncategorized → should NOT be touched
+  const inserts = await db.insert(transactions).values([
+    { accountId: acct.id, date: "2026-04-01", description: "Wise Transfer ref 12345678", rawDescription: "x", amount: -100, source: "manual" },
+    { accountId: acct.id, date: "2026-04-02", description: "Wise Transfer ref 87654321", rawDescription: "x", amount: -50, source: "manual" },
+    { accountId: acct.id, date: "2026-04-03", description: "WISE TRANSFER REF 55555555", rawDescription: "x", amount: -200, source: "manual" },
+    { accountId: acct.id, date: "2026-04-04", description: "Wise Transfer ref 99999999", rawDescription: "x", amount: -25, source: "manual", categoryId: diningCatId },
+    { accountId: acct.id, date: "2026-04-05", description: "Starbucks Order", rawDescription: "x", amount: -7, source: "manual" },
+  ]).returning();
+  const [w1, w2, w3, w4, w5] = inserts;
+
+  // User just labeled w1 as Transfers. Backfill should pick up w2 + w3 but
+  // leave w4 alone (already categorized) and w5 (different description).
+  const count = await backfillRule(db, {
+    description: "Wise Transfer ref 12345678",
+    categoryId: transferCatId,
+    subcategoryId: null,
+    excludeId: w1!.id,
+  });
+  assert.equal(count, 2, "should match the two other uncategorized Wise transfers");
+
+  const after = await db.select().from(transactions);
+  const byId = new Map(after.map((r) => [r.id, r]));
+  assert.equal(byId.get(w2!.id)!.categoryId, transferCatId, "w2 should be backfilled");
+  assert.equal(byId.get(w3!.id)!.categoryId, transferCatId, "w3 should be backfilled (different case but normalized matches)");
+  assert.equal(byId.get(w4!.id)!.categoryId, diningCatId, "w4 already categorized: must stay Dining");
+  assert.equal(byId.get(w5!.id)!.categoryId, null, "w5 unrelated: must stay uncategorized");
+
+  t.after(() => {
+    try { fs.unlinkSync(tmpDbPath); } catch { /* ignore */ }
+  });
+});
