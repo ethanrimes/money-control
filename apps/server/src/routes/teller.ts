@@ -22,7 +22,7 @@ import {
   type NewTransaction,
 } from "@moneycontrol/db/schema";
 import { config } from "../config.js";
-import { resolveCategory } from "../lib/categorize.js";
+import { resolveCategoryWithHeuristics } from "../lib/categorize.js";
 import {
   TellerError,
   getBalance,
@@ -243,7 +243,7 @@ tellerRoutes.post("/sync", async (c) => {
               .where(eq(transactions.tellerTxnId, t.id))
               .limit(1);
             if (existing.length > 0) continue;
-            const { categoryId, subcategoryId } = await resolveCategory(db, t.description);
+            const { categoryId, subcategoryId } = await resolveCategoryWithHeuristics(db, t.description);
             const row: NewTransaction = {
               tellerTxnId: t.id,
               accountId,

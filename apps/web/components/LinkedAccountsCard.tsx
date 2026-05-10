@@ -40,11 +40,11 @@ export function LinkedAccountsCard({
   }
 
   const showSetupHint = config && (!config.appId || !config.mtlsConfigured);
-  // Orphan group (seeded-from-Excel accounts not backed by any aggregator)
-  // is intentionally hidden: those accounts have $0 live balance and are
-  // just visual noise. Their historical transactions stay in the DB and
-  // continue to appear in the transactions table.
-  const linkedGroups = summary?.groups.filter((g) => g.enrollmentId !== 0) ?? [];
+  // Hide the "seeded" group (Excel-imported placeholder accounts the user
+  // explicitly asked to suppress). Keep Teller, Plaid, AND manual accounts
+  // visible — manual covers Amex HYSA / Rewards Checking imported via CSV
+  // while Plaid OAuth approval is pending.
+  const visibleGroups = summary?.groups.filter((g) => g.kind !== "seeded") ?? [];
 
   return (
     <Card
@@ -84,13 +84,13 @@ export function LinkedAccountsCard({
         </p>
       ) : (
         <div className="space-y-4">
-          {linkedGroups.map((g) => (
+          {visibleGroups.map((g) => (
             <InstitutionBlock
-              key={`${g.kind}-${g.enrollmentId}`}
+              key={`${g.kind}-${g.enrollmentId}-${g.institutionName}`}
               name={g.institutionName}
-              badge={g.kind === "plaid" ? "Plaid" : g.kind === "teller" ? "Teller" : undefined}
+              badge={g.kind === "plaid" ? "Plaid" : g.kind === "teller" ? "Teller" : g.kind === "manual" ? "Manual" : undefined}
               accounts={g.accounts}
-              onDisconnect={() => disconnect(g)}
+              onDisconnect={g.enrollmentId === 0 ? undefined : () => disconnect(g)}
             />
           ))}
         </div>

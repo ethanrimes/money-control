@@ -7,6 +7,7 @@ import { accountsRoutes } from "./routes/accounts.js";
 import { aggregatorRoutes } from "./routes/aggregator.js";
 import { budgetRoutes } from "./routes/budget.js";
 import { categoriesRoutes } from "./routes/categories.js";
+import { importRoutes } from "./routes/import.js";
 import { plaidRoutes } from "./routes/plaid.js";
 import { summaryRoutes } from "./routes/summary.js";
 import { tellerRoutes } from "./routes/teller.js";
@@ -26,6 +27,7 @@ app.route("/summary", summaryRoutes);
 app.route("/teller", tellerRoutes);
 app.route("/plaid", plaidRoutes);
 app.route("/aggregator", aggregatorRoutes);
+app.route("/import", importRoutes);
 
 app.onError((err, c) => {
   console.error(err);

@@ -85,8 +85,8 @@ export interface AccountDTOInGroup {
 }
 
 export interface AccountGroup {
-  kind: "teller" | "plaid" | "manual";
-  enrollmentId: number;          // 0 for orphan / manual groups
+  kind: "teller" | "plaid" | "manual" | "seeded";
+  enrollmentId: number;          // 0 for manual / seeded groups
   institutionName: string;
   createdAt: string;
   accounts: AccountDTOInGroup[];

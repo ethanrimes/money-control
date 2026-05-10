@@ -167,12 +167,26 @@ export function TransactionsTable({ refreshKey }: { refreshKey: number }) {
     }
   }, [fillSource, fillHoverIndex, sortedRows, catOptions]);
 
-  // Listen for mouseup anywhere so dropping outside the table still resolves.
+  // While a drag is active, listen for mousemove on the WINDOW (not on each
+  // <td>). During a mouse drag the browser captures pointer events to the
+  // element that received the original mousedown, so onMouseEnter on other
+  // cells doesn't fire. Hit-test with document.elementFromPoint instead.
   useEffect(() => {
     if (!fillSource) return;
+    const onMove = (e: MouseEvent) => {
+      const el = document.elementFromPoint(e.clientX, e.clientY);
+      const tr = el?.closest("tr[data-row-index]") as HTMLElement | null;
+      if (!tr) return;
+      const idx = Number(tr.getAttribute("data-row-index"));
+      if (Number.isFinite(idx)) setFillHoverIndex(idx);
+    };
     const onUp = () => { void endDragFill(); };
+    window.addEventListener("mousemove", onMove);
     window.addEventListener("mouseup", onUp);
-    return () => window.removeEventListener("mouseup", onUp);
+    return () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
   }, [fillSource, endDragFill]);
 
   async function saveCategory(txId: number, value: string) {
@@ -296,7 +310,11 @@ export function TransactionsTable({ refreshKey }: { refreshKey: number }) {
                     ? (fillValue === "" ? "— uncategorized —" : catOptions.find((o) => o.id === Number(fillValue))?.label ?? "")
                     : null;
                   return (
-                    <tr key={r.id} className={`hover:bg-bg/60 ${inFillRange ? "bg-accent/5" : ""}`}>
+                    <tr
+                      key={r.id}
+                      data-row-index={rowIndex}
+                      className={`hover:bg-bg/60 ${inFillRange ? "bg-accent/5" : ""}`}
+                    >
                       <td className="border-b border-border/50 py-2 pr-4 text-muted tabular">{r.date}</td>
                       <td className="border-b border-border/50 py-2 pr-4">
                         {r.description}
@@ -305,36 +323,37 @@ export function TransactionsTable({ refreshKey }: { refreshKey: number }) {
                         )}
                       </td>
                       <td className="border-b border-border/50 py-2 pr-4 text-muted">{r.accountName}</td>
-                      <td
-                        className="group relative border-b border-border/50 py-2 pr-4"
-                        onMouseEnter={() => { if (fillSource) setFillHoverIndex(rowIndex); }}
-                      >
-                        <select
-                          className={`w-56 max-w-full rounded border border-border bg-bg px-1.5 py-1 text-xs ${previewLabel ? "ring-1 ring-accent/60" : ""}`}
-                          value={previewLabel
-                            ? (fillValue === "" ? "" : Number(fillValue))
-                            : (r.subcategoryId ?? r.categoryId ?? "")}
-                          disabled={savingId === r.id || fillSource !== null}
-                          onChange={(e) => saveCategory(r.id, e.target.value)}
-                        >
-                          <option value="">— uncategorized —</option>
-                          {catOptions.map((o) => (
-                            <option key={o.id} value={o.id}>{o.label}</option>
-                          ))}
-                        </select>
-                        {/* Fill handle: small square in the bottom-right of every
-                            category cell. Click + drag down to propagate this row's
-                            category to the rows below. */}
-                        <button
-                          type="button"
-                          onMouseDown={(e) => {
-                            e.preventDefault();
-                            startDragFill(r.id, String(r.subcategoryId ?? r.categoryId ?? ""), rowIndex);
-                          }}
-                          title="Drag to fill the same category into rows below"
-                          className="absolute -right-1 bottom-1 h-2.5 w-2.5 cursor-crosshair rounded-sm bg-accent opacity-0 transition group-hover:opacity-80 hover:opacity-100"
-                          aria-label="Drag-fill category"
-                        />
+                      <td className="border-b border-border/50 py-2 pr-4">
+                        <div className="relative inline-block">
+                          <select
+                            className={`w-56 max-w-full rounded border border-border bg-bg px-1.5 py-1 pr-4 text-xs ${previewLabel ? "ring-1 ring-accent/60" : ""}`}
+                            value={previewLabel
+                              ? (fillValue === "" ? "" : Number(fillValue))
+                              : (r.subcategoryId ?? r.categoryId ?? "")}
+                            disabled={savingId === r.id || fillSource !== null}
+                            onChange={(e) => saveCategory(r.id, e.target.value)}
+                          >
+                            <option value="">— uncategorized —</option>
+                            {catOptions.map((o) => (
+                              <option key={o.id} value={o.id}>{o.label}</option>
+                            ))}
+                          </select>
+                          {/* Fill handle: always-visible blue square at the
+                              bottom-right corner of the select. Click + drag
+                              down propagates this row's category to the rows
+                              below. Sized + positioned to be discoverable. */}
+                          <button
+                            type="button"
+                            onMouseDown={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              startDragFill(r.id, String(r.subcategoryId ?? r.categoryId ?? ""), rowIndex);
+                            }}
+                            title="Drag down to copy this category to the rows below"
+                            className="absolute -bottom-1 -right-1 z-10 h-3 w-3 cursor-row-resize rounded-sm border border-white/40 bg-accent shadow hover:scale-125"
+                            aria-label="Drag-fill category"
+                          />
+                        </div>
                       </td>
                       <td className={`border-b border-border/50 py-2 pr-2 text-right tabular ${r.amount < 0 ? "text-negative" : "text-positive"}`}>
                         {fmtUsd(r.amount, { sign: r.amount > 0 })}

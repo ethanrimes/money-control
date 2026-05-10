@@ -38,6 +38,7 @@ summaryRoutes.get("/accounts", async (c) => {
       id: accounts.id,
       name: accounts.name,
       type: accounts.type,
+      subtype: accounts.subtype,
       institution: accounts.institution,
       lastFour: accounts.lastFour,
       tellerEnrollmentId: accounts.tellerEnrollmentId,
@@ -61,7 +62,7 @@ summaryRoutes.get("/accounts", async (c) => {
   });
 
   type Group = {
-    kind: "teller" | "plaid" | "orphan";
+    kind: "teller" | "plaid" | "manual" | "seeded";
     enrollmentId: number;
     institutionName: string;
     createdAt: string;
@@ -85,14 +86,39 @@ summaryRoutes.get("/accounts", async (c) => {
     })),
   ];
 
+  // Manual accounts: created via POST /accounts (always set subtype on create).
+  // Seeded accounts: from xlsx import, no aggregator + no subtype. The user
+  // chose to hide the latter from the UI; the former should stay visible.
   const orphans = allAccts.filter((a) => a.tellerEnrollmentId === null && a.plaidItemId === null);
-  if (orphans.length > 0) {
+  const manual = orphans.filter((a) => a.subtype !== null && a.subtype !== "");
+  const seeded = orphans.filter((a) => a.subtype === null || a.subtype === "");
+  if (manual.length > 0) {
+    // Group manual accounts BY institution so multiple Amex deposit accounts
+    // (HYSA + Rewards Checking) appear under one "American Express" header.
+    const byInst = new Map<string, typeof manual>();
+    for (const a of manual) {
+      const inst = a.institution ?? "Manual";
+      const arr = byInst.get(inst) ?? [];
+      arr.push(a);
+      byInst.set(inst, arr);
+    }
+    for (const [institutionName, accts] of byInst) {
+      groups.push({
+        kind: "manual",
+        enrollmentId: 0,
+        institutionName,
+        createdAt: "",
+        accounts: accts.map(toDTO),
+      });
+    }
+  }
+  if (seeded.length > 0) {
     groups.push({
-      kind: "orphan",
+      kind: "seeded",
       enrollmentId: 0,
       institutionName: "Unlinked accounts",
       createdAt: "",
-      accounts: orphans.map(toDTO),
+      accounts: seeded.map(toDTO),
     });
   }
 

@@ -3,7 +3,7 @@
 // ingest) and the manual-create path.
 
 import { and, desc, eq, isNull, sql } from "drizzle-orm";
-import { categorizationRules, transactions, type NewCategorizationRule } from "@moneycontrol/db/schema";
+import { categories, categorizationRules, transactions, type NewCategorizationRule } from "@moneycontrol/db/schema";
 import { normalizeDescription } from "@moneycontrol/core";
 import type { getDb } from "@moneycontrol/db";
 
@@ -98,6 +98,61 @@ export async function upsertRule(
 // (lowercase, alnum + few punctuation), but be defensive anyway.
 function escapeLiteral(s: string): string {
   return s.replace(/'/g, "''");
+}
+
+// Description patterns that are almost-always inter-account transfers or
+// credit-card payments. When the user hasn't yet built a rule, we still want
+// these out of the spend total — they aren't consumption. Keep this list
+// conservative: only descriptions that are unambiguous payment/transfer
+// strings across the major US banks.
+const TRANSFER_PATTERNS: RegExp[] = [
+  /^internet transfer/i,                      // BofA / Chase web transfers
+  /\bzelle\b/i,                                // Zelle = peer-to-peer (often friends, sometimes transfers)
+  /\bvenmo\b.*\b(payment|cashout|withdrawal)\b/i,
+  /\bwise\b.*(?:trnwise|wise\s+\d|us\s+inc)/i, // Wise outgoing transfers
+  /^bilt payment/i,                            // Bilt = rent — NOT a transfer; we exclude this pattern below
+  /amex epayment/i,                            // Amex bill payment from bank
+  /american\s*express\s+des:(?:transfer|ach\s*pmt)/i,
+  /^americanexpress\s+des:transfer/i,
+  /capital\s*one.*(?:mobile\s+)?(?:pymt|pmt|pyment|payment)/i,
+  /^online\s*payment\s*-\s*thank\s*you/i,      // Common credit card payment ack
+  /^mobile\s*payment\s*-\s*thank\s*you/i,
+  /^fid\s*bkg\s*svc\b/i,                       // Fidelity ACH transfer
+  /^chase\s+credit\s+crd/i,                    // Chase credit card payment
+  /^one-time\s+deposit/i,                      // Amex HYSA "One-Time Deposit"
+];
+// Exception patterns: matches a transfer-looking string that is in fact NOT a
+// transfer. Checked first so we don't mis-categorize them.
+const NOT_TRANSFER_PATTERNS: RegExp[] = [
+  /^bilt payment.*biltrent/i,                  // Bilt rent payment IS rent
+];
+
+function looksLikeTransfer(description: string): boolean {
+  if (NOT_TRANSFER_PATTERNS.some((p) => p.test(description))) return false;
+  return TRANSFER_PATTERNS.some((p) => p.test(description));
+}
+
+// Wrapper used by every ingest path (Teller sync, Plaid sync, CSV import).
+// Tries learned rules first; falls back to the static transfer heuristics so
+// inter-account moves and credit-card payments don't pollute spend totals
+// even before the user has built any rules.
+export async function resolveCategoryWithHeuristics(
+  db: Db,
+  description: string,
+): Promise<ResolvedCategory> {
+  const ruleHit = await resolveCategory(db, description);
+  if (ruleHit.categoryId !== null) return ruleHit;
+
+  if (!looksLikeTransfer(description)) return ruleHit;
+
+  // Find (or skip if missing) the user's "transfer" top-level category.
+  const transferCat = (await db
+    .select()
+    .from(categories)
+    .where(and(eq(categories.type, "transfer"), isNull(categories.parentId)))
+    .limit(1))[0];
+  if (!transferCat) return ruleHit;
+  return { categoryId: transferCat.id, subcategoryId: null, ruleId: null };
 }
 
 // Apply (categoryId, subcategoryId) to every UNCATEGORIZED transaction whose

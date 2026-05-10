@@ -23,7 +23,7 @@ import {
 } from "@moneycontrol/db/schema";
 import { normalizePlaidAccountType, normalizePlaidAmount } from "@moneycontrol/core";
 import { config } from "../config.js";
-import { resolveCategory } from "../lib/categorize.js";
+import { resolveCategoryWithHeuristics } from "../lib/categorize.js";
 import { LINK_PRODUCTS, getPlaid, plaidConfigured } from "../lib/plaid.js";
 
 export const plaidRoutes = new Hono();
@@ -236,7 +236,7 @@ plaidRoutes.post("/sync", async (c) => {
           if (existing.length > 0) continue;
           const amount = normalizePlaidAmount(Number(t.amount));
           const description = t.name ?? t.merchant_name ?? "Transaction";
-          const { categoryId, subcategoryId } = await resolveCategory(db, description);
+          const { categoryId, subcategoryId } = await resolveCategoryWithHeuristics(db, description);
           const row: NewTransaction = {
             plaidTransactionId: t.transaction_id,
             accountId,

@@ -109,6 +109,50 @@ test("resolveCategory: normalizes punctuation/case so casing doesn't miss the ru
   });
 });
 
+test("resolveCategoryWithHeuristics: auto-classifies transfers + credit card payments", async (t) => {
+  const { db } = await freshDb();
+  const { categories } = await import("../src/schema.js");
+  const { resolveCategoryWithHeuristics } = await import("../../../apps/server/src/lib/categorize.js");
+
+  // No learned rules. Just the Transfers category with type='transfer'.
+  const transfers = (await db.insert(categories).values({ name: "Transfers", parentId: null, type: "transfer" }).returning())[0]!;
+  const dining = (await db.insert(categories).values({ name: "Dining", parentId: null, type: "expense" }).returning())[0]!;
+
+  // Strings that SHOULD auto-classify as transfers:
+  for (const desc of [
+    "Internet transfer from BANK OF AMERICA, N.A. DDA account XXXXXXXX5616",
+    "AMEX EPAYMENT ACH PMT",
+    "AMERICANEXPRESS DES:TRANSFER ID:XXXX",
+    "AMERICAN EXPRESS DES:ACH PMT ID:W0484",
+    "CAPITAL ONE MOBILE PYMT",
+    "CAPITAL ONE DES:MOBILE PMT",
+    "ONLINE PAYMENT - THANK YOU",
+    "MOBILE PAYMENT - THANK YOU",
+    "Wise Inc WISE 94931176",
+    "WISE INC TRNWISE foo",
+    "FID BKG SVC LLC DES:MONEYLINE",
+    "One-Time Deposit BANK OF AMERICA NA CHK (-5616)",
+    "VENMO DES:PAYMENT",
+  ]) {
+    const r = await resolveCategoryWithHeuristics(db, desc);
+    assert.equal(r.categoryId, transfers.id, `should heuristic-classify as transfer: ${desc}`);
+  }
+
+  // Strings that should NOT be auto-classified (no match → uncategorized):
+  for (const desc of [
+    "BILT PAYMENT BILTRENT",     // Bilt = rent, exception pattern
+    "Starbucks Coffee #1234",
+    "Apple.com Bill",
+    "Trader Joe's Groceries",
+  ]) {
+    const r = await resolveCategoryWithHeuristics(db, desc);
+    assert.equal(r.categoryId, null, `should NOT heuristic-classify: ${desc} (got ${r.categoryId})`);
+  }
+
+  void dining;
+  t.after(() => { try { fs.unlinkSync(tmpDbPath); } catch { /* ignore */ } });
+});
+
 test("categories CRUD: create top-level + subcategory, rename, delete-promote, delete-cascade", async (t) => {
   const { db } = await freshDb();
   const { categories } = await import("../src/schema.js");
