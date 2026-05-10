@@ -23,6 +23,7 @@
     "node": ">=20"
   },
   "devDependencies": {
+    "pdfjs-dist": "^4.10.38",
     "typescript": "^5.6.3"
   }
 }

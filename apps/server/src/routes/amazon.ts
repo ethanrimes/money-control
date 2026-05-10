@@ -33,6 +33,11 @@ interface AmazonItem {
   quantity: number;
 }
 
+interface AmazonCredit {
+  label: string;   // shown in transaction description, e.g. "Gift Card Used"
+  amount: number;  // positive number that was credited toward the order
+}
+
 interface AmazonOrderBody {
   orderId: string;
   datePlaced: string;            // ISO YYYY-MM-DD
@@ -40,6 +45,9 @@ interface AmazonOrderBody {
   items: AmazonItem[];
   tax?: number;
   shipping?: number;
+  // New generic form. Older callers can still pass giftCardAmount /
+  // rewardsPoints individually; both forms are merged into one credits list.
+  credits?: AmazonCredit[];
   giftCardAmount?: number;
   rewardsPoints?: number;
   grandTotal: number;
@@ -59,8 +67,10 @@ amazonRoutes.post("/amazon-order", async (c) => {
   }
   const tax = body.tax ?? 0;
   const shipping = body.shipping ?? 0;
-  const giftCardAmount = body.giftCardAmount ?? 0;
-  const rewardsPoints = body.rewardsPoints ?? 0;
+  // Merge legacy named fields into the generic credits array.
+  const credits: AmazonCredit[] = [...(body.credits ?? [])];
+  if ((body.giftCardAmount ?? 0) > 0) credits.push({ label: "Gift Card Used", amount: body.giftCardAmount! });
+  if ((body.rewardsPoints ?? 0) > 0) credits.push({ label: "Rewards Points Used", amount: body.rewardsPoints! });
 
   const db = getDb();
   const acct = (await db
@@ -162,28 +172,18 @@ amazonRoutes.post("/amazon-order", async (c) => {
       notes: tag,
     });
   }
-  // Credits — gift card balance + reward points used. These are positive
-  // because they offset the negative item lines (net = grand_total). We
-  // bucket them as 'transfer' so they don't inflate income.
-  if (giftCardAmount > 0) {
+  // Credits — gift card balance, reward points, Subscribe & Save discount,
+  // coupons, etc. All positive numbers that offset the negative item lines
+  // so the inserts net to -grandTotal. We bucket them as 'transfer' so
+  // they don't inflate income.
+  for (const credit of credits) {
+    if (!Number.isFinite(credit.amount) || credit.amount <= 0) continue;
     inserts.push({
       accountId: acct.id,
       date: body.datePlaced,
-      description: `Amazon — Gift Card Used`,
-      rawDescription: `Amazon Gift Card`,
-      amount: roundCents(giftCardAmount),
-      source: "manual",
-      notes: tag,
-      categoryId: transferCat?.id ?? null,
-    });
-  }
-  if (rewardsPoints > 0) {
-    inserts.push({
-      accountId: acct.id,
-      date: body.datePlaced,
-      description: `Amazon — Rewards Points Used`,
-      rawDescription: `Amazon Rewards Points`,
-      amount: roundCents(rewardsPoints),
+      description: `Amazon — ${credit.label}`,
+      rawDescription: `Amazon ${credit.label}`,
+      amount: roundCents(credit.amount),
       source: "manual",
       notes: tag,
       categoryId: transferCat?.id ?? null,

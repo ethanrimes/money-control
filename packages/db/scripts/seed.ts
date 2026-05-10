@@ -291,52 +291,110 @@ async function main() {
   }
   console.log(`categorization rules: ${ruleMap.size}`);
 
-  // Backfill: walk every currently-uncategorized transaction in the DB (any
-  // source — teller, plaid, manual, even pre-existing excel rows that came
-  // in as #N/A) and try to apply BOTH the freshly-rebuilt rules AND the
-  // transfer heuristics. Rules typically miss because aggregator wording
-  // differs from xlsx wording; the heuristics catch obvious cross-vendor
-  // patterns (internet transfers, Wise, Amex EPAYMENT, etc.). Anything
-  // still uncategorized after this can be labeled in the UI to grow the
-  // rule table.
+  // Backfill: walk every currently-uncategorized transaction in the DB
+  // and try a layered match strategy:
+  //
+  //   1. EXACT — normalized description equals a rule.match_text.
+  //      Rare hit on aggregator data; aggregator wording differs from
+  //      xlsx wording.
+  //
+  //   2. FUZZY — significant tokens (5+ chars, non-stopword) from the
+  //      rule's match_text overlap with tokens in the transaction. Picks
+  //      the rule with the highest overlap. Catches things like
+  //      "Spotify USA" (Excel) ↔ "Spotify P099XXX" (Teller) where the
+  //      merchant token is shared.
+  //
+  //   3. HEURISTIC — static transfer-pattern regexes (Internet transfer,
+  //      Amex EPAYMENT, Wise, etc.). Catches inter-account moves and
+  //      credit-card payments regardless of rule presence.
+  //
+  // Anything still uncategorized after this gets labeled via the UI; the
+  // user's edits grow the rule table for next time.
   const { resolveCategoryWithHeuristics } = await import(
     "../../../apps/server/src/lib/categorize.js"
   );
-  console.log("\nbackfilling rules + heuristics onto existing uncategorized transactions…");
+  console.log("\nbackfilling rules + fuzzy match + heuristics onto existing uncategorized transactions…");
   const uncat = await db
     .select({ id: transactions.id, description: transactions.description })
     .from(transactions)
     .where(isNull(transactions.categoryId));
+
+  // Build a fuzzy-match index from the rules — token → list of (rule, ruleTokens).
+  // A "significant" rule token is 5+ alphanumeric chars and not a stopword.
+  const STOPWORDS = new Set([
+    "payment", "bill", "transfer", "deposit", "withdrawal", "purchase",
+    "debit", "credit", "online", "mobile", "charge", "charges", "monthly",
+    "subscription", "transaction", "merchant", "amazon", "amzn",  // amazon is too broad — match via line items instead
+  ]);
+  function significantTokens(text: string): string[] {
+    return text.split(/[\s.\-_/&]+/).filter((t) => t.length >= 5 && !STOPWORDS.has(t));
+  }
+  const indexedRules: Array<{ tokens: string[]; categoryId: number; subcategoryId: number | null }> = [];
+  for (const [matchText, { categoryId, subcategoryId }] of ruleMap) {
+    if (categoryId === null) continue;
+    const tokens = significantTokens(matchText);
+    if (tokens.length === 0) continue;
+    indexedRules.push({ tokens, categoryId, subcategoryId });
+  }
+
   let backfilledByRule = 0;
+  let backfilledByFuzzy = 0;
   let backfilledByHeuristic = 0;
   const nowIso = new Date().toISOString();
   for (const t of uncat) {
     const key = normalize(t.description);
-    const ruleHit = ruleMap.get(key);
     let categoryId: number | null = null;
     let subcategoryId: number | null = null;
-    let viaRule = false;
-    if (ruleHit && ruleHit.categoryId !== null) {
-      categoryId = ruleHit.categoryId;
-      subcategoryId = ruleHit.subcategoryId;
-      viaRule = true;
-    } else {
-      const h = await resolveCategoryWithHeuristics(db, t.description);
-      if (h.categoryId === null) continue;
-      categoryId = h.categoryId;
-      subcategoryId = h.subcategoryId;
+    let mode: "rule" | "fuzzy" | "heuristic" | null = null;
+
+    // 1. Exact.
+    const exact = ruleMap.get(key);
+    if (exact && exact.categoryId !== null) {
+      categoryId = exact.categoryId;
+      subcategoryId = exact.subcategoryId;
+      mode = "rule";
     }
-    await db.update(transactions).set({
-      categoryId,
-      subcategoryId,
-      updatedAt: nowIso,
-    }).where(eq(transactions.id, t.id));
-    if (viaRule) backfilledByRule++;
+    // 2. Fuzzy.
+    if (mode === null) {
+      const tTokens = new Set(significantTokens(key));
+      let bestScore = 0;
+      let bestRule: typeof indexedRules[number] | null = null;
+      for (const rule of indexedRules) {
+        let score = 0;
+        for (const tok of rule.tokens) if (tTokens.has(tok)) score++;
+        // Require at least one overlap; prefer higher overlap.
+        if (score > bestScore) {
+          bestScore = score;
+          bestRule = rule;
+        }
+      }
+      if (bestRule && bestScore >= 1) {
+        categoryId = bestRule.categoryId;
+        subcategoryId = bestRule.subcategoryId;
+        mode = "fuzzy";
+      }
+    }
+    // 3. Heuristic.
+    if (mode === null) {
+      const h = await resolveCategoryWithHeuristics(db, t.description);
+      if (h.categoryId !== null) {
+        categoryId = h.categoryId;
+        subcategoryId = h.subcategoryId;
+        mode = "heuristic";
+      }
+    }
+
+    if (mode === null) continue;
+    await db.update(transactions).set({ categoryId, subcategoryId, updatedAt: nowIso })
+      .where(eq(transactions.id, t.id));
+    if (mode === "rule") backfilledByRule++;
+    else if (mode === "fuzzy") backfilledByFuzzy++;
     else backfilledByHeuristic++;
   }
   console.log(`  by exact rule:  ${backfilledByRule}`);
+  console.log(`  by fuzzy match: ${backfilledByFuzzy}`);
   console.log(`  by heuristics:  ${backfilledByHeuristic}`);
-  console.log(`  still uncategorized: ${uncat.length - backfilledByRule - backfilledByHeuristic}`);
+  console.log(`  still uncategorized: ${uncat.length - backfilledByRule - backfilledByFuzzy - backfilledByHeuristic}`);
 
   console.log("\nseed complete");
 }
