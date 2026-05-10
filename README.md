@@ -43,4 +43,9 @@ npm run dev:mobile     # Expo dev server
 
 ## Teller setup
 
-The mTLS material in `teller/` is gitignored. To pull live transactions you also need access tokens, obtained via Teller Connect (handled in Phase 5).
+Two pieces are needed before the "Link account" button in the dashboard does anything:
+
+1. **mTLS material** — drop `certificate.pem` and `private_key.pem` from your Teller dashboard into `./teller/` (gitignored). The server uses these on every API call.
+2. **Application ID** — sign up at [teller.io](https://teller.io), copy your Application ID, set `TELLER_APP_ID=app_...` in `.env`. Restart the server.
+
+Once both are set, the dashboard's "Linked institutions" card will let you launch Teller Connect, pick a bank/credit card, and the resulting access token is persisted server-side. Hit Refresh to pull balances + transactions.

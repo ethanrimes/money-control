@@ -123,6 +123,28 @@ export interface SyncResult {
   syncedAt?: string;
 }
 
+export interface TellerConfig {
+  appId: string | null;
+  environment: "sandbox" | "development" | "production";
+  mtlsConfigured: boolean;
+}
+
+export interface EnrollmentRow {
+  id: number;
+  enrollmentId: string;
+  institutionName: string;
+  userId: string | null;
+  createdAt: string;
+}
+
+// Shape Teller Connect hands us on a successful link.
+export interface TellerEnrollmentPayload {
+  accessToken: string;
+  user: { id: string };
+  enrollment: { id: string; institution: { name: string } };
+  signatures?: string[];
+}
+
 // ---------- API surface ----------
 
 export const api = {
@@ -159,6 +181,16 @@ export const api = {
   stats: () => request<Stats>("/summary/stats"),
 
   sync: () => request<SyncResult>("/teller/sync", { method: "POST" }),
+
+  tellerConfig: () => request<TellerConfig>("/teller/config"),
+  enrollments: () => request<EnrollmentRow[]>("/teller/enrollments"),
+  createEnrollment: (payload: TellerEnrollmentPayload) =>
+    request<{ id: number; status: "created" | "updated" }>("/teller/enrollments", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  deleteEnrollment: (id: number) =>
+    request<{ ok: boolean }>(`/teller/enrollments/${id}`, { method: "DELETE" }),
 };
 
 // ---------- Helpers ----------

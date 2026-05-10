@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { BudgetSettings } from "@/components/BudgetSettings";
 import { CategoryBars } from "@/components/CategoryBars";
+import { LinkedAccountsCard } from "@/components/LinkedAccountsCard";
 import { NetCashCard } from "@/components/NetCashCard";
 import { RefreshButton } from "@/components/RefreshButton";
 import { SpendSeriesChart } from "@/components/SpendSeriesChart";
@@ -29,6 +30,8 @@ export default function DashboardPage() {
       </header>
 
       <div className="space-y-6">
+        <LinkedAccountsCard refreshKey={refreshKey} onChange={bump} />
+
         <StatsTiles refreshKey={refreshKey} />
 
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
