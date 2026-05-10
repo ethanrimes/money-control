@@ -21,7 +21,7 @@
 //   }
 
 import { Hono } from "hono";
-import { and, eq, gte, like, lte, sql } from "drizzle-orm";
+import { and, eq, gte, isNull, like, lte, sql } from "drizzle-orm";
 import { getDb } from "@moneycontrol/db";
 import { accounts, categories, transactions, type NewTransaction } from "@moneycontrol/db/schema";
 
@@ -124,13 +124,29 @@ amazonRoutes.post("/amazon-order", async (c) => {
     await db.delete(transactions).where(eq(transactions.id, orig.id));
   }
 
-  // Look up the user's "Transfers" category once — used for the credit
-  // (gift card + rewards) line items so they don't count as income.
-  const transferCat = (await db
+  // Credits on an Amazon order (gift card balance, rewards points,
+  // Subscribe & Save, coupons) bucket into "Income / Income - Rebates":
+  // the user treats these as income because they're real spending power
+  // funded by something other than this month's cash. Create the
+  // subcategory on-the-fly the first time we need it.
+  const incomeParent = (await db
     .select()
     .from(categories)
-    .where(and(eq(categories.type, "transfer"), sql`${categories.parentId} IS NULL`))
+    .where(and(eq(categories.type, "income"), isNull(categories.parentId)))
     .limit(1))[0];
+  let rebatesCat = incomeParent
+    ? (await db
+        .select()
+        .from(categories)
+        .where(and(eq(categories.name, "Income - Rebates"), eq(categories.parentId, incomeParent.id)))
+        .limit(1))[0]
+    : undefined;
+  if (!rebatesCat && incomeParent) {
+    rebatesCat = (await db
+      .insert(categories)
+      .values({ name: "Income - Rebates", parentId: incomeParent.id, type: "income" })
+      .returning())[0];
+  }
 
   const inserts: NewTransaction[] = [];
 
@@ -172,10 +188,9 @@ amazonRoutes.post("/amazon-order", async (c) => {
       notes: tag,
     });
   }
-  // Credits — gift card balance, reward points, Subscribe & Save discount,
-  // coupons, etc. All positive numbers that offset the negative item lines
-  // so the inserts net to -grandTotal. We bucket them as 'transfer' so
-  // they don't inflate income.
+  // Credits — gift card, rewards, Subscribe & Save, coupons. All positive.
+  // Categorize as Income / Income - Rebates so they show up in the budget
+  // tab as income alongside paychecks.
   for (const credit of credits) {
     if (!Number.isFinite(credit.amount) || credit.amount <= 0) continue;
     inserts.push({
@@ -186,7 +201,8 @@ amazonRoutes.post("/amazon-order", async (c) => {
       amount: roundCents(credit.amount),
       source: "manual",
       notes: tag,
-      categoryId: transferCat?.id ?? null,
+      categoryId: incomeParent?.id ?? null,
+      subcategoryId: rebatesCat?.id ?? null,
     });
   }
 

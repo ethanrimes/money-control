@@ -132,10 +132,102 @@ function looksLikeTransfer(description: string): boolean {
   return TRANSFER_PATTERNS.some((p) => p.test(description));
 }
 
+// Merchant-keyword → (category, subcategory) heuristic table. Hand-curated
+// against the user's actual bank-statement vocabulary. Order matters —
+// first match wins. The categorize-with-heuristics pass uses this after
+// learned rules and substring matching have already missed.
+//
+// Cheat-sheet for the prefixes:
+//   AplPay  = Apple Pay; the merchant follows
+//   TST*    = Toast POS — restaurants
+//   SQ *    = Square POS — anything
+//   BT*DD   = DoorDash
+//   IC*     = Instacart
+//   CPI*    = vending-machine processor (Canteen)
+const MERCHANT_PATTERNS: Array<{ pattern: RegExp; categoryName: string; subcategoryName?: string }> = [
+  // ---- Dining / Restaurants ----
+  // Toast POS through Apple Pay is almost always a sit-down restaurant.
+  { pattern: /aplpay\s+tst\*/i, categoryName: "Food & Maintenance", subcategoryName: "Dining" },
+  { pattern: /\bsq\s*\*\s/i, categoryName: "Food & Maintenance", subcategoryName: "Dining" },
+  // DoorDash (sometimes shows as "BT*DD *DOORDASH")
+  { pattern: /\bdoordash\b|bt\*dd\b/i, categoryName: "Food & Maintenance", subcategoryName: "Dining" },
+  // Microsoft campus cafes & vending (user works at MS)
+  { pattern: /aplpay\s+(ms\s+ca|ms\s+cm|ms\s+mill|mscafe|soupson|jacks\s+bb|tous\s+les\s+jou|pho\s+bac|salt\s+and|edgewate|hood\s+fam|rhein\s+ha|dordlofv|culturemap)/i, categoryName: "Food & Maintenance", subcategoryName: "Dining" },
+  { pattern: /\bcanteen\b|cpi\*\s*canteen|ctlp\*\s*volume/i, categoryName: "Food & Maintenance", subcategoryName: "Dining" },
+  { pattern: /aplpay\s+coca-?cola/i, categoryName: "Food & Maintenance", subcategoryName: "Dining" },
+
+  // ---- Groceries ----
+  { pattern: /\binstacart\b|^ic\*|aplpay\s+ic\*/i, categoryName: "Food & Maintenance", subcategoryName: "Groceries" },
+  { pattern: /aplpay\s+jumbo\b/i, categoryName: "Food & Maintenance", subcategoryName: "Groceries" },
+  { pattern: /\bwholefds\b|\bwhole\s+foods\b/i, categoryName: "Food & Maintenance", subcategoryName: "Groceries" },
+  { pattern: /\btrader\s+joe/i, categoryName: "Food & Maintenance", subcategoryName: "Groceries" },
+  { pattern: /\bsafeway\b/i, categoryName: "Food & Maintenance", subcategoryName: "Groceries" },
+
+  // ---- Rideshare ----
+  { pattern: /\buber\b.*\btrip|uber\.com/i, categoryName: "Transportation", subcategoryName: "Transportation (Rideshare)" },
+  { pattern: /\blyft\b/i, categoryName: "Transportation", subcategoryName: "Transportation (Rideshare)" },
+
+  // ---- Travel: airlines, in-flight wifi, duty-free, international shops,
+  //              ATM withdrawals abroad, etc. ----
+  { pattern: /alaska\s+air|aplpay\s+alaska\s+air/i, categoryName: "Travel" },
+  { pattern: /frontier\s+air/i, categoryName: "Travel" },
+  { pattern: /wifionboard/i, categoryName: "Travel" },
+  { pattern: /\b(dufry|jetpac)/i, categoryName: "Travel" },
+  { pattern: /\bbogota\b|b\.bog\b|bogot\b|\bcolombia\b|\bsingapore\b/i, categoryName: "Travel" },
+  { pattern: /\bath\b.*withdrwl|withdrwl.*\bath\b/i, categoryName: "Travel" },
+  { pattern: /\bbay\s+area.*\bga\b|toll\s+plaza|fastrak/i, categoryName: "Travel" },
+
+  // ---- Rent ----
+  { pattern: /hollandpartner|^bilt\s+(payment|rent)|biltrent/i, categoryName: "Rent & Utilities", subcategoryName: "Rent" },
+
+  // ---- Subscriptions / software / online services ----
+  { pattern: /^facebk\b|^facebook\b|\bfb\.me\b/i, categoryName: "Subscriptions", subcategoryName: "Subscriptions / Software" },
+  { pattern: /\bx\s+corp\.?\s+paid|\bx\s+premium\b|^twitter\b/i, categoryName: "Subscriptions", subcategoryName: "Subscriptions / Software" },
+  { pattern: /\bopenai\b|\banthropic\b|github\.com|^claude\b|^cursor\b/i, categoryName: "Subscriptions", subcategoryName: "Subscriptions / Software" },
+
+  // ---- Income (affiliate / referral) ----
+  { pattern: /^impact\s+radius|\baffiliate\b|\breferral\s+payout/i, categoryName: "Income", subcategoryName: "Income - Salary" },
+  // BofA mobile-deposit (depositing a check) — usually checks from outside
+  // sources, treat as Income - Transfer so it doesn't double-count as new income.
+  { pattern: /\bbkofamerica\s+mobile\b.*\bdeposit\b/i, categoryName: "Income", subcategoryName: "Income - Transfer" },
+
+  // ---- Amazon catch-alls (after PDF imports break out specific items) ----
+  // Tax line items from Amazon order imports — bucket as a known
+  // subcategory the user already had ("Amazon Tax/Shipping").
+  { pattern: /^amazon\s+—\s+tax\b/i, categoryName: "Durable Goods", subcategoryName: "Amazon Tax/Shipping" },
+  { pattern: /^amazon\s+—\s+shipping\b/i, categoryName: "Durable Goods", subcategoryName: "Amazon Tax/Shipping" },
+  // Generic "Amazon — <item>" fallback — Durable Goods is the safe bucket
+  // for an unspecified Amazon purchase. User can re-categorize specific
+  // ones in the UI (Electronics, Groceries, Household Goods, etc.).
+  { pattern: /^amazon\s+—\s+/i, categoryName: "Durable Goods", subcategoryName: "Household Goods" },
+];
+
+async function lookupCategoryByName(
+  db: Db,
+  categoryName: string,
+  subcategoryName?: string,
+): Promise<{ categoryId: number | null; subcategoryId: number | null }> {
+  const { categories } = await import("@moneycontrol/db/schema");
+  const parent = (await db
+    .select()
+    .from(categories)
+    .where(and(eq(categories.name, categoryName), isNull(categories.parentId)))
+    .limit(1))[0];
+  if (!parent) return { categoryId: null, subcategoryId: null };
+  if (!subcategoryName) return { categoryId: parent.id, subcategoryId: null };
+  const sub = (await db
+    .select()
+    .from(categories)
+    .where(and(eq(categories.name, subcategoryName), eq(categories.parentId, parent.id)))
+    .limit(1))[0];
+  return { categoryId: parent.id, subcategoryId: sub?.id ?? null };
+}
+
 // Wrapper used by every ingest path (Teller sync, Plaid sync, CSV import).
-// Tries learned rules first; falls back to the static transfer heuristics so
-// inter-account moves and credit-card payments don't pollute spend totals
-// even before the user has built any rules.
+// Resolution order:
+//   1. Learned rules (exact normalized-description match)
+//   2. Static transfer-pattern heuristic
+//   3. Curated merchant-keyword patterns (MERCHANT_PATTERNS above)
 export async function resolveCategoryWithHeuristics(
   db: Db,
   description: string,
@@ -143,16 +235,25 @@ export async function resolveCategoryWithHeuristics(
   const ruleHit = await resolveCategory(db, description);
   if (ruleHit.categoryId !== null) return ruleHit;
 
-  if (!looksLikeTransfer(description)) return ruleHit;
+  // Transfer patterns
+  if (looksLikeTransfer(description)) {
+    const transferCat = (await db
+      .select()
+      .from(categories)
+      .where(and(eq(categories.type, "transfer"), isNull(categories.parentId)))
+      .limit(1))[0];
+    if (transferCat) return { categoryId: transferCat.id, subcategoryId: null, ruleId: null };
+  }
 
-  // Find (or skip if missing) the user's "transfer" top-level category.
-  const transferCat = (await db
-    .select()
-    .from(categories)
-    .where(and(eq(categories.type, "transfer"), isNull(categories.parentId)))
-    .limit(1))[0];
-  if (!transferCat) return ruleHit;
-  return { categoryId: transferCat.id, subcategoryId: null, ruleId: null };
+  // Merchant-keyword patterns
+  for (const m of MERCHANT_PATTERNS) {
+    if (m.pattern.test(description)) {
+      const { categoryId, subcategoryId } = await lookupCategoryByName(db, m.categoryName, m.subcategoryName);
+      if (categoryId !== null) return { categoryId, subcategoryId, ruleId: null };
+    }
+  }
+
+  return ruleHit;
 }
 
 // Apply (categoryId, subcategoryId) to every UNCATEGORIZED transaction whose

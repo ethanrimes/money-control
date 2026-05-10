@@ -319,23 +319,39 @@ async function main() {
     .from(transactions)
     .where(isNull(transactions.categoryId));
 
-  // Build a fuzzy-match index from the rules — token → list of (rule, ruleTokens).
-  // A "significant" rule token is 5+ alphanumeric chars and not a stopword.
+  // Fuzzy-match index. A "significant" token is 4+ chars and not a stopword.
+  // Stopwords include payment-rail prefixes (AplPay, Venmo, PayPal) that
+  // appear in transaction descriptions without telling us anything about
+  // the merchant, and generic words ("payment", "trip", "card") that
+  // would dilute scoring.
   const STOPWORDS = new Set([
-    "payment", "bill", "transfer", "deposit", "withdrawal", "purchase",
-    "debit", "credit", "online", "mobile", "charge", "charges", "monthly",
-    "subscription", "transaction", "merchant", "amazon", "amzn",  // amazon is too broad — match via line items instead
+    // generic transaction noise
+    "payment", "payments", "transfer", "transfers", "deposit", "withdrawal", "withdrawals",
+    "purchase", "purchases", "debit", "credit", "online", "mobile", "charge", "charges",
+    "monthly", "subscription", "subscriptions", "transaction", "transactions", "merchant",
+    "bill", "bills", "card", "cards", "cash", "send", "from", "with", "your", "this", "that",
+    "shop", "shopping", "fees",
+    // payment-rail prefixes — what comes after is the merchant
+    "aplpay", "applepay", "venmo", "paypal", "googlepay", "samsungpay",
+    // Amazon is too broad as a single-token match; Amazon line items get
+    // categorized via per-item PDF imports instead.
+    "amazon", "amzn",
+    // common reference / location tokens that appear in many descriptions
+    "trip", "purc", "purch", "ides", "trnwise", "indn", "info", "with", "auto",
   ]);
   function significantTokens(text: string): string[] {
-    return text.split(/[\s.\-_/&]+/).filter((t) => t.length >= 5 && !STOPWORDS.has(t));
+    return text.split(/[\s.\-_/&*]+/).filter((t) => t.length >= 4 && !STOPWORDS.has(t));
   }
-  const indexedRules: Array<{ tokens: string[]; categoryId: number; subcategoryId: number | null }> = [];
+  const indexedRules: Array<{ matchText: string; tokens: string[]; categoryId: number; subcategoryId: number | null }> = [];
   for (const [matchText, { categoryId, subcategoryId }] of ruleMap) {
     if (categoryId === null) continue;
     const tokens = significantTokens(matchText);
-    if (tokens.length === 0) continue;
-    indexedRules.push({ tokens, categoryId, subcategoryId });
+    if (tokens.length === 0 && matchText.length < 6) continue;
+    indexedRules.push({ matchText, tokens, categoryId, subcategoryId });
   }
+  // Pre-sort by length descending so substring matching prefers the most
+  // specific rule (longer matchText = more specific signal).
+  indexedRules.sort((a, b) => b.matchText.length - a.matchText.length);
 
   let backfilledByRule = 0;
   let backfilledByFuzzy = 0;
@@ -354,7 +370,24 @@ async function main() {
       subcategoryId = exact.subcategoryId;
       mode = "rule";
     }
-    // 2. Fuzzy.
+    // 2a. Substring — strongest fuzzy signal. If a rule's full matchText
+    //     appears anywhere in the transaction's normalized description,
+    //     use it. Pre-sorted by length DESC so we hit the most specific
+    //     rule first ("uber trip help" beats "uber").
+    if (mode === null) {
+      for (const rule of indexedRules) {
+        if (rule.matchText.length < 5) continue; // too short = too greedy
+        if (key.includes(rule.matchText)) {
+          categoryId = rule.categoryId;
+          subcategoryId = rule.subcategoryId;
+          mode = "fuzzy";
+          break;
+        }
+      }
+    }
+    // 2b. Token overlap — for cases where the rule's words appear in the
+    //     transaction but not contiguously (e.g. "Spotify USA" rule vs
+    //     "SPOTIFY P099XXX" transaction; only "spotify" overlaps).
     if (mode === null) {
       const tTokens = new Set(significantTokens(key));
       let bestScore = 0;
@@ -362,7 +395,6 @@ async function main() {
       for (const rule of indexedRules) {
         let score = 0;
         for (const tok of rule.tokens) if (tTokens.has(tok)) score++;
-        // Require at least one overlap; prefer higher overlap.
         if (score > bestScore) {
           bestScore = score;
           bestRule = rule;
