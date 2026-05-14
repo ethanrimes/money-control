@@ -327,11 +327,14 @@ class _Filters extends StatelessWidget {
             const DropdownMenuItem(value: 'all', child: Text('All categories')),
             const DropdownMenuItem(value: 'uncat', child: Text('— Uncategorized —')),
             for (final top in categories) ...[
-              DropdownMenuItem(value: top.id.toString(), child: Text(top.name)),
+              DropdownMenuItem(
+                value: top.category.id.toString(),
+                child: Text(top.category.name),
+              ),
               for (final sub in top.subcategories)
                 DropdownMenuItem(
                   value: sub.id.toString(),
-                  child: Text('  ↳ ${top.name} / ${sub.name}'),
+                  child: Text('  ↳ ${top.category.name} / ${sub.name}'),
                 ),
             ],
           ],

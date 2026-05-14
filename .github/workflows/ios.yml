@@ -64,6 +64,11 @@ jobs:
             --org com.ethankallett \
             --no-pub \
             .
+          # `flutter create` ships a placeholder test/widget_test.dart that
+          # references MyApp + pulls in flutter_test. We don't have
+          # flutter_test in dev_dependencies (no test coverage yet), so
+          # delete the generated file to keep `flutter analyze` clean.
+          rm -f test/widget_test.dart
           ls ios/Runner.xcodeproj/project.pbxproj ios/Runner/Info.plist ios/Podfile
 
       - name: flutter pub get
