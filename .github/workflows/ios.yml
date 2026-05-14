@@ -27,7 +27,7 @@ jobs:
     name: Build signed IPA
     runs-on: macos-latest
     timeout-minutes: 60
-    environment: production
+    environment: Production
     env:
       APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
       IOS_BUNDLE_ID: ${{ vars.IOS_BUNDLE_ID }}
