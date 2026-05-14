@@ -1,25 +1,16 @@
-// Drizzle's proxy migrator wants a "run" callback. We translate to node:sqlite.
-import { migrate } from "drizzle-orm/sqlite-proxy/migrator";
+// Postgres migrations are applied via supabase/migrations/0001_init.sql,
+// not via drizzle-kit's migrator. This entry point now just runs that file
+// against DATABASE_URL (or DIRECT_URL) for ad-hoc use.
+import fs from "node:fs";
 import path from "node:path";
-import { getDb, getDbPath, getRawSqlite } from "./client.js";
+import { getRawClient } from "./client.js";
 
-const db = getDb();
-const sqlite = getRawSqlite();
-const migrationsFolder = path.resolve(import.meta.dirname, "../drizzle");
-console.log(`migrating ${getDbPath()} from ${migrationsFolder}`);
+const sqlFile = process.env.MIGRATION_SQL
+  ?? path.resolve(import.meta.dirname, "../../../supabase/migrations/0001_init.sql");
 
-await migrate(
-  db,
-  async (queries) => {
-    sqlite.exec("BEGIN");
-    try {
-      for (const q of queries) sqlite.exec(q);
-      sqlite.exec("COMMIT");
-    } catch (e) {
-      sqlite.exec("ROLLBACK");
-      throw e;
-    }
-  },
-  { migrationsFolder },
-);
+const sql = getRawClient();
+const text = fs.readFileSync(sqlFile, "utf8");
+console.log(`applying ${sqlFile}`);
+await sql.unsafe(text);
 console.log("done");
+await sql.end({ timeout: 5 });

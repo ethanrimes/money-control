@@ -1,2 +1,9 @@
 export * from "./schema.js";
-export { getDb, getDbPath } from "./client.js";
+export {
+  getDb,
+  getRawClient,
+  withUser,
+  currentUserId,
+  __resetForTests,
+  type Db,
+} from "./client.js";

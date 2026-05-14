@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { and, eq, gte, lte, sql } from "drizzle-orm";
-import { alias } from "drizzle-orm/sqlite-core";
+import { alias } from "drizzle-orm/pg-core";
 import { getDb } from "@moneycontrol/db";
 import { accounts, balances, budgetSettings, categories, plaidItems, tellerEnrollments, transactions } from "@moneycontrol/db/schema";
 import {
@@ -78,14 +78,14 @@ summaryRoutes.get("/accounts", async (c) => {
       kind: "teller",
       enrollmentId: en.id,
       institutionName: en.institutionName,
-      createdAt: en.createdAt,
+      createdAt: en.createdAt instanceof Date ? en.createdAt.toISOString() : en.createdAt,
       accounts: allAccts.filter((a) => a.tellerEnrollmentId === en.id).map(toDTO),
     })),
     ...plaidIts.map<Group>((it) => ({
       kind: "plaid",
       enrollmentId: it.id,
       institutionName: it.institutionName,
-      createdAt: it.createdAt,
+      createdAt: it.createdAt instanceof Date ? it.createdAt.toISOString() : it.createdAt,
       accounts: allAccts.filter((a) => a.plaidItemId === it.id).map(toDTO),
     })),
   ];

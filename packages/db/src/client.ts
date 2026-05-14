@@ -1,87 +1,97 @@
-import { DatabaseSync, type StatementResultingChanges } from "node:sqlite";
-import { drizzle } from "drizzle-orm/sqlite-proxy";
-import fs from "node:fs";
-import path from "node:path";
-import { aliasSelectColumns } from "./sql-rewrite.js";
+import { AsyncLocalStorage } from "node:async_hooks";
+import { drizzle, type PostgresJsDatabase } from "drizzle-orm/postgres-js";
+import { sql as dsql } from "drizzle-orm";
+import postgres from "postgres";
 import * as schema from "./schema.js";
 
-let _sqlite: DatabaseSync | null = null;
-let _db: ReturnType<typeof drizzle<typeof schema>> | null = null;
+type Schema = typeof schema;
+export type Db = PostgresJsDatabase<Schema>;
+type Tx = Parameters<Parameters<Db["transaction"]>[0]>[0];
 
-export function getDbPath(): string {
-  if (process.env.DATABASE_FILE) return process.env.DATABASE_FILE;
-  const repoRoot = path.resolve(import.meta.dirname, "../../..");
-  return path.join(repoRoot, "data", "moneycontrol.db");
-}
+let _client: ReturnType<typeof postgres> | null = null;
+let _db: Db | null = null;
 
-function openSqlite(): DatabaseSync {
-  if (_sqlite) return _sqlite;
-  const dbPath = getDbPath();
-  fs.mkdirSync(path.dirname(dbPath), { recursive: true });
-  const sqlite = new DatabaseSync(dbPath);
-  sqlite.exec("PRAGMA journal_mode = WAL");
-  sqlite.exec("PRAGMA foreign_keys = ON");
-  _sqlite = sqlite;
-  return sqlite;
-}
+// Active per-request tx. When set, getDb() returns this scoped handle so all
+// SELECT/UPDATE/DELETE go through the connection that has request.jwt.claims
+// configured, and RLS auto-filters by the caller's user_id. INSERTs omit
+// user_id and let the column DEFAULT (current_user_id()) supply it.
+const requestCtx = new AsyncLocalStorage<{ tx: Tx; userId: string }>();
 
-// Drizzle's sqlite-proxy adapter: we hand back row arrays from any SQL executor.
-// node:sqlite returns row objects; convert them to arrays in column order.
-async function executeQuery(sql: string, params: unknown[], method: "all" | "run" | "get" | "values") {
-  const sqlite = openSqlite();
-
-  if (method === "run") {
-    const stmt = sqlite.prepare(sql);
-    const info: StatementResultingChanges = stmt.run(...(params as never[]));
-    return { rows: [[Number(info.lastInsertRowid), info.changes]] };
+function getConnectionString(): string {
+  const url = process.env.DATABASE_URL;
+  if (!url) {
+    throw new Error(
+      "DATABASE_URL is not set. Point it at your Supabase Postgres (transaction pooler URL recommended for serverless).",
+    );
   }
+  return url;
+}
 
-  // SELECT path: rewrite outermost SELECT to add positional column aliases so
-  // duplicate column names (e.g. multiple joined tables with `name`) don't
-  // collapse in node:sqlite's row-as-object representation.
-  const aliased = aliasSelectColumns(sql);
-  if (process.env.DRIZZLE_DEBUG) console.error("[drizzle-proxy]", method, "\n  in:", sql, "\n  out:", aliased);
-  const stmt = sqlite.prepare(aliased);
-  const objs = stmt.all(...(params as never[])) as Array<Record<string, unknown>>;
-  if (objs.length === 0) return { rows: [] };
-
-  // Sort keys by their _cN ordinal so values come back in SELECT order even
-  // if the runtime emits them in some other ordering.
-  const keys = Object.keys(objs[0]!).sort((a, b) => {
-    const ai = parseAliasOrdinal(a);
-    const bi = parseAliasOrdinal(b);
-    return ai - bi;
+function openClient(): ReturnType<typeof postgres> {
+  if (_client) return _client;
+  _client = postgres(getConnectionString(), {
+    // Vercel functions are short-lived; keep the pool small and let
+    // Supabase's PgBouncer handle real pooling.
+    max: 1,
+    idle_timeout: 20,
+    // PgBouncer in transaction mode doesn't support prepared statements.
+    prepare: false,
   });
-  const rows = objs.map((o) => keys.map((k) => o[k]));
-
-  if (method === "get") return { rows: rows[0] ?? [] };
-  return { rows };
+  return _client;
 }
 
-function parseAliasOrdinal(key: string): number {
-  const m = key.match(/^_c(\d+)$/);
-  return m ? Number(m[1]) : Number.POSITIVE_INFINITY;
-}
-
-export function getDb() {
+// Inside a withUser() block this returns the per-request tx (RLS-scoped and
+// connection-pinned). Otherwise returns the global unscoped handle. The
+// unscoped handle is only safe for code paths that don't touch tenant data
+// (eg ad-hoc admin scripts using the service_role connection string).
+export function getDb(): Db {
+  const ctx = requestCtx.getStore();
+  if (ctx) return ctx.tx as unknown as Db;
   if (_db) return _db;
-  _db = drizzle(executeQuery, { schema });
+  _db = drizzle(openClient(), { schema });
   return _db;
 }
 
-// Raw SQL access for the migrator and for ad-hoc scripts.
-export function getRawSqlite(): DatabaseSync {
-  return openSqlite();
+// Returns the currently active user id, or null when outside a withUser()
+// scope. Routes generally don't need this — INSERTs use the column DEFAULT
+// (public.current_user_id()) which reads the same JWT claim.
+export function currentUserId(): string | null {
+  return requestCtx.getStore()?.userId ?? null;
 }
 
-// Test-only: drop the cached singletons so the next getDb() call re-reads
-// process.env.DATABASE_FILE. Used by `freshDb()` in tests so each test gets
-// an isolated SQLite file.
+// Opens a Drizzle transaction, sets request.jwt.claims so RLS policies (and
+// the user_id column DEFAULT) see the caller as the given user, then runs fn
+// with AsyncLocalStorage primed so getDb()/currentUserId() inside fn return
+// the scoped handle. All queries inside fn share one connection.
+export async function withUser<T>(
+  userId: string,
+  fn: () => Promise<T>,
+): Promise<T> {
+  const db = (_db ??= drizzle(openClient(), { schema }));
+  return db.transaction(async (tx) => {
+    await tx.execute(
+      dsql`select set_config('request.jwt.claims', ${JSON.stringify({ sub: userId })}, true)`,
+    );
+    return requestCtx.run({ tx, userId }, fn);
+  });
+}
+
+// Raw postgres-js client for ad-hoc scripts / the migrator. Bypasses RLS.
+export function getRawClient(): ReturnType<typeof postgres> {
+  return openClient();
+}
+
+// Test-only: drop the cached singletons. Used by tests that need to reopen
+// against a different DATABASE_URL.
 export function __resetForTests(): void {
-  if (_sqlite) {
-    try { _sqlite.close(); } catch { /* ignore */ }
+  if (_client) {
+    try {
+      _client.end({ timeout: 1 });
+    } catch {
+      /* ignore */
+    }
   }
-  _sqlite = null;
+  _client = null;
   _db = null;
 }
 

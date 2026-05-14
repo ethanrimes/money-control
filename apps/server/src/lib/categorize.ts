@@ -56,7 +56,7 @@ async function touchRule(db: Db, ruleId: number): Promise<void> {
     .update(categorizationRules)
     .set({
       hits: sql`${categorizationRules.hits} + 1`,
-      lastUsedAt: new Date().toISOString(),
+      lastUsedAt: new Date(),
     })
     .where(eq(categorizationRules.id, ruleId));
 }
@@ -300,7 +300,7 @@ export async function backfillRule(
   );
   if (matches.length === 0) return 0;
 
-  const nowIso = new Date().toISOString();
+  const nowIso = new Date();
   for (const m of matches) {
     await db
       .update(transactions)

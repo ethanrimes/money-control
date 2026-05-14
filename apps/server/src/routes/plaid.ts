@@ -259,7 +259,7 @@ plaidRoutes.post("/sync", async (c) => {
           const description = t.name ?? t.merchant_name ?? "Transaction";
           await db
             .update(transactions)
-            .set({ date: t.date, description, amount, updatedAt: new Date().toISOString() })
+            .set({ date: t.date, description, amount, updatedAt: new Date() })
             .where(eq(transactions.plaidTransactionId, t.transaction_id));
         }
 

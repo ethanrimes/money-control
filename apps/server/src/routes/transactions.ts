@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { and, desc, eq, gte, lte } from "drizzle-orm";
-import { alias } from "drizzle-orm/sqlite-core";
+import { alias } from "drizzle-orm/pg-core";
 import { getDb } from "@moneycontrol/db";
 import { transactions, accounts, categories } from "@moneycontrol/db/schema";
 import { backfillRule, upsertRule } from "../lib/categorize.js";
@@ -68,7 +68,7 @@ transactionsRoutes.patch("/:id", async (c) => {
   if (before.length === 0) return c.json({ error: "not found" }, 404);
   const txn = before[0]!;
 
-  const update: Record<string, unknown> = { updatedAt: new Date().toISOString() };
+  const update: Record<string, unknown> = { updatedAt: new Date() };
   if ("categoryId" in body) update.categoryId = body.categoryId ?? null;
   if ("subcategoryId" in body) update.subcategoryId = body.subcategoryId ?? null;
   if ("notes" in body) update.notes = body.notes ?? null;
@@ -118,7 +118,7 @@ transactionsRoutes.patch("/", async (c) => {
   }
   const ids = body.ids.filter((n): n is number => Number.isInteger(n));
   const db = getDb();
-  const nowIso = new Date().toISOString();
+  const nowIso = new Date();
 
   let updated = 0;
   let backfillCount = 0;

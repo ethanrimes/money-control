@@ -1,7 +1,8 @@
-// Typed wrapper around fetch -> the @moneycontrol/server. All endpoints are
-// read-mostly except /transactions PATCH, /budget PUT, and /teller/sync POST.
+// Typed wrapper around fetch -> the Hono API. In production the API is served
+// by the Next.js catch-all route at /api/*, so we always use relative URLs and
+// rely on cookies (Supabase session) traveling with credentials: 'include'.
 
-const BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3001";
+const BASE = "/api";
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
@@ -11,7 +12,12 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       ...(init?.headers ?? {}),
     },
     cache: "no-store",
+    credentials: "include",
   });
+  if (res.status === 401) {
+    if (typeof window !== "undefined") window.location.href = "/login";
+    throw new Error("unauthenticated");
+  }
   if (!res.ok) {
     const text = await res.text().catch(() => "");
     throw new Error(`${res.status} ${path}: ${text || res.statusText}`);
@@ -184,7 +190,7 @@ export interface EnrollmentRow {
   id: number;
   enrollmentId: string;
   institutionName: string;
-  userId: string | null;
+  tellerUserId: string | null;
   createdAt: string;
 }
 

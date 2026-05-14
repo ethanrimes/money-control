@@ -10,7 +10,7 @@
 // and across web/mobile clients.
 
 import { Hono } from "hono";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { getDb } from "@moneycontrol/db";
 import {
   accounts,
@@ -72,7 +72,7 @@ tellerRoutes.get("/enrollments", async (c) => {
       id: r.id,
       enrollmentId: r.enrollmentId,
       institutionName: r.institutionName,
-      userId: r.userId,
+      tellerUserId: r.tellerUserId,
       createdAt: r.createdAt,
       accounts: allAccts
         .filter((a) => a.tellerEnrollmentId === r.id)
@@ -112,7 +112,7 @@ tellerRoutes.post("/enrollments", async (c) => {
     // Re-link: update token in case user re-completed Connect.
     await db
       .update(tellerEnrollments)
-      .set({ accessToken, institutionName, userId: body.user?.id ?? null })
+      .set({ accessToken, institutionName, tellerUserId: body.user?.id ?? null })
       .where(eq(tellerEnrollments.id, existing[0]!.id));
     return c.json({ id: existing[0]!.id, status: "updated" });
   }
@@ -122,7 +122,7 @@ tellerRoutes.post("/enrollments", async (c) => {
       enrollmentId,
       institutionName,
       accessToken,
-      userId: body.user?.id ?? null,
+      tellerUserId: body.user?.id ?? null,
     })
     .returning();
   return c.json({ id: inserted[0]!.id, status: "created" });

@@ -92,7 +92,8 @@ export function buildHistoricalDailyCum(
     const monthKey = t.date.slice(0, 7);
     const day = Number(t.date.slice(8, 10));
     if (!byMonth[monthKey]) byMonth[monthKey] = new Array(31).fill(0);
-    byMonth[monthKey]![day - 1] += -t.amount;
+    const arr = byMonth[monthKey]!;
+    arr[day - 1] = (arr[day - 1] ?? 0) + -t.amount;
   }
   // Cumulate per-month.
   for (const k of Object.keys(byMonth)) {
@@ -142,7 +143,7 @@ export function buildSpendSeries(args: {
     } else if (t.amount >= 0) {
       continue;
     }
-    dailyOutflow[d] += -t.amount;
+    dailyOutflow[d] = (dailyOutflow[d] ?? 0) + -t.amount;
   }
   const points: CumulativeSpendPoint[] = [];
   let cum = 0;

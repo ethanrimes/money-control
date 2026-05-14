@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { SignOutButton } from "./SignOutButton";
 
 const TABS = [
   { href: "/", label: "Dashboard" },
@@ -11,6 +12,7 @@ const TABS = [
 
 export function TabsNav() {
   const pathname = usePathname();
+  if (pathname?.startsWith("/login") || pathname?.startsWith("/auth")) return null;
   return (
     <nav className="border-b border-border bg-surface">
       <div className="mx-auto flex max-w-7xl items-center gap-1 px-4">
@@ -33,6 +35,9 @@ export function TabsNav() {
             </Link>
           );
         })}
+        <div className="ml-auto pr-2">
+          <SignOutButton />
+        </div>
       </div>
     </nav>
   );
