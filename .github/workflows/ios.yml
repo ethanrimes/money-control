@@ -69,6 +69,13 @@ jobs:
       - name: flutter pub get
         run: flutter pub get
 
+      - name: flutter analyze
+        # Fast static analysis (~30s) — surfaces every Dart compile error at
+        # once rather than letting the 3-minute Xcode archive bail on the
+        # first one. --no-fatal-warnings keeps lint warnings from killing
+        # CI; we only want analyze to fail on real errors.
+        run: flutter analyze --no-fatal-warnings --no-fatal-infos
+
       - name: Install signing cert + provisioning profile
         id: signing
         env:

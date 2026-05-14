@@ -308,7 +308,7 @@ class _Filters extends StatelessWidget {
         ),
         const SizedBox(height: 10),
         DropdownButtonFormField<int?>(
-          initialValue: accountFilter,
+          value: accountFilter,
           decoration: const InputDecoration(labelText: 'Account', isDense: true),
           items: [
             const DropdownMenuItem(value: null, child: Text('All accounts')),
@@ -319,7 +319,7 @@ class _Filters extends StatelessWidget {
         ),
         const SizedBox(height: 8),
         DropdownButtonFormField<String>(
-          initialValue: uncategorizedCat
+          value: uncategorizedCat
               ? 'uncat'
               : (categoryFilter == null ? 'all' : categoryFilter.toString()),
           decoration: const InputDecoration(labelText: 'Category', isDense: true),

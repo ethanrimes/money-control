@@ -70,7 +70,7 @@ class _HistoricalAvgPageState extends State<HistoricalAvgPage> {
                     ),
                     const SizedBox(height: 12),
                     DropdownButtonFormField<String>(
-                      initialValue: _selectionKey(),
+                      value: _selectionKey(),
                       decoration: const InputDecoration(
                           labelText: 'Category / subcategory', isDense: true),
                       items: [
