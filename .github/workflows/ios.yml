@@ -161,11 +161,16 @@ jobs:
       - name: Patch xcconfig + ExportOptions with profile info
         run: |
           set -euxo pipefail
-          if ! grep -q 'PROVISIONING_PROFILE_SPECIFIER' ios/Flutter/Release.xcconfig; then
+          # Append the assignment only when an actual assignment line for
+          # PROVISIONING_PROFILE_SPECIFIER isn't already present (a previous
+          # version of this workflow matched the word inside a comment).
+          if ! grep -E -q '^[[:space:]]*PROVISIONING_PROFILE_SPECIFIER[[:space:]]*=' ios/Flutter/Release.xcconfig; then
             echo "PROVISIONING_PROFILE_SPECIFIER = $PROFILE_NAME" >> ios/Flutter/Release.xcconfig
           fi
           /usr/bin/sed -i '' "s/__PROFILE_UUID__/$PROFILE_UUID/g" ios/ExportOptions.plist
+          echo "--- Release.xcconfig ---"
           cat ios/Flutter/Release.xcconfig
+          echo "--- ExportOptions.plist ---"
           plutil -p ios/ExportOptions.plist
 
       - name: Patch project.pbxproj with DEVELOPMENT_TEAM

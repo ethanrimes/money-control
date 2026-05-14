@@ -4,6 +4,7 @@
 DEVELOPMENT_TEAM = XKXCB8B22L
 CODE_SIGN_STYLE = Manual
 CODE_SIGN_IDENTITY = Apple Distribution
-# PROVISIONING_PROFILE_SPECIFIER is appended dynamically by the CI workflow
-# after it decodes the .mobileprovision (the profile *name* lives inside the
-# encoded blob, so we can't hardcode it here).
+// PROVISIONING_PROFILE_SPECIFIER is appended dynamically by the CI workflow
+// after it decodes the .mobileprovision (the profile *name* lives inside the
+// encoded blob, so we can't hardcode it here). xcconfig uses // for comments;
+// any line beginning with # is treated as a preprocessor directive.
