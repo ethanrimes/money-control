@@ -1,0 +1,264 @@
+name: iOS build
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "apps/mobile/**"
+      - ".github/workflows/ios.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "apps/mobile/**"
+      - ".github/workflows/ios.yml"
+  workflow_dispatch:
+    inputs:
+      upload_testflight:
+        description: "Upload the IPA to TestFlight after building"
+        type: boolean
+        default: false
+
+concurrency:
+  group: ios-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build signed IPA
+    runs-on: macos-latest
+    timeout-minutes: 60
+    environment: production
+    env:
+      APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
+      IOS_BUNDLE_ID: ${{ vars.IOS_BUNDLE_ID }}
+      FLUTTER_VERSION: "3.27.4"
+    defaults:
+      run:
+        working-directory: apps/mobile
+    steps:
+      - name: Phase start
+        id: t0
+        run: echo "started_at=$(date +%s)" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Show toolchain versions
+        id: versions
+        run: |
+          set -euxo pipefail
+          xcodebuild -version
+          sw_vers
+          ruby --version
+          /usr/bin/security -h | head -1 || true
+
+      - name: Setup Flutter ${{ env.FLUTTER_VERSION }}
+        id: flutter_setup
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+
+      - name: Flutter / Dart versions
+        run: flutter --version
+
+      - name: Phase — flutter setup done
+        run: echo "::notice title=Phase timing::flutter-setup $(($(date +%s) - ${{ steps.t0.outputs.started_at }}))s"
+
+      - name: Materialize iOS native scaffold
+        id: t_scaffold
+        run: |
+          set -euxo pipefail
+          # `flutter create` is idempotent — it generates the iOS scaffold
+          # (project.pbxproj, AppDelegate.swift, LaunchScreen, etc) only when
+          # missing. Our committed Info.plist, Podfile, xcconfigs, and Dart
+          # code are left untouched.
+          flutter create \
+            --platforms=ios \
+            --project-name moneycontrol \
+            --org com.ethankallett \
+            --no-pub \
+            .
+          ls ios/Runner.xcodeproj/project.pbxproj ios/Runner/Info.plist ios/Podfile
+
+      - name: Phase — scaffold done
+        run: echo "::notice title=Phase timing::scaffold $(($(date +%s) - ${{ steps.t0.outputs.started_at }}))s"
+
+      - name: flutter pub get
+        run: flutter pub get
+
+      - name: Install signing cert + provisioning profile
+        id: signing
+        env:
+          BUILD_CERTIFICATE_BASE64: ${{ secrets.BUILD_CERTIFICATE_BASE64 }}
+          P12_PASSWORD: ${{ secrets.P12_PASSWORD }}
+          BUILD_PROVISION_PROFILE_BASE64: ${{ secrets.BUILD_PROVISION_PROFILE_BASE64 }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        # Sets:
+        #   PROFILE_UUID   — used in ExportOptions.plist
+        #   PROFILE_NAME   — used as PROVISIONING_PROFILE_SPECIFIER in xcconfig
+        # Apple's canonical "install codesigning cert in CI" recipe.
+        run: |
+          set -euo pipefail
+          CERT_PATH="$RUNNER_TEMP/build_certificate.p12"
+          PP_PATH="$RUNNER_TEMP/build_pp.mobileprovision"
+          KEYCHAIN_PATH="$RUNNER_TEMP/app-signing.keychain-db"
+
+          echo -n "$BUILD_CERTIFICATE_BASE64" | base64 --decode -o "$CERT_PATH"
+          echo -n "$BUILD_PROVISION_PROFILE_BASE64" | base64 --decode -o "$PP_PATH"
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+          security import "$CERT_PATH" -P "$P12_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+          # Make the new keychain the default search keychain so xcodebuild
+          # finds the cert when it asks for the signing identity.
+          ORIGINAL_KEYCHAINS=$(security list-keychains -d user | sed 's/[" ]//g' | tr '\n' ' ')
+          security list-keychains -d user -s "$KEYCHAIN_PATH" $ORIGINAL_KEYCHAINS
+
+          # Drop the .mobileprovision into the location Xcode reads from.
+          PROFILES_DIR="$HOME/Library/MobileDevice/Provisioning Profiles"
+          mkdir -p "$PROFILES_DIR"
+          UUID=$(security cms -D -i "$PP_PATH" | /usr/libexec/PlistBuddy -c 'Print :UUID' /dev/stdin)
+          NAME=$(security cms -D -i "$PP_PATH" | /usr/libexec/PlistBuddy -c 'Print :Name' /dev/stdin)
+          cp "$PP_PATH" "$PROFILES_DIR/$UUID.mobileprovision"
+
+          {
+            echo "PROFILE_UUID=$UUID"
+            echo "PROFILE_NAME=$NAME"
+            echo "KEYCHAIN_PATH=$KEYCHAIN_PATH"
+          } >> "$GITHUB_ENV"
+
+          # Surface what we found so the next time CI fails, the log shows
+          # the actual UUID/Name that got matched.
+          echo "Provisioning profile: name='$NAME' uuid=$UUID"
+
+      - name: Patch xcconfigs + ExportOptions with profile info
+        run: |
+          set -euxo pipefail
+          # The profile name lives inside the encrypted blob, so we couldn't
+          # commit it. Append the now-known specifier to Release.xcconfig.
+          if ! grep -q 'PROVISIONING_PROFILE_SPECIFIER' ios/Flutter/Release.xcconfig; then
+            echo "PROVISIONING_PROFILE_SPECIFIER = $PROFILE_NAME" >> ios/Flutter/Release.xcconfig
+          fi
+          # Swap the placeholder UUID into ExportOptions.plist.
+          /usr/bin/sed -i '' "s/__PROFILE_UUID__/$PROFILE_UUID/g" ios/ExportOptions.plist
+          cat ios/Flutter/Release.xcconfig
+          plutil -p ios/ExportOptions.plist
+
+      - name: Patch project.pbxproj — set DEVELOPMENT_TEAM + bundle id
+        run: |
+          set -euxo pipefail
+          # flutter create writes a fresh pbxproj each run; bake in our team id
+          # by editing the generated file. We only touch DEVELOPMENT_TEAM and
+          # PRODUCT_BUNDLE_IDENTIFIER occurrences so future Flutter template
+          # updates don't blow up our customizations.
+          if [ -f ios/Runner.xcodeproj/project.pbxproj ]; then
+            /usr/bin/sed -i '' \
+              "s/PRODUCT_BUNDLE_IDENTIFIER = com.ethankallett.moneycontrol;/PRODUCT_BUNDLE_IDENTIFIER = $IOS_BUNDLE_ID;/g" \
+              ios/Runner.xcodeproj/project.pbxproj
+            # Add DEVELOPMENT_TEAM where it isn't already present.
+            if ! grep -q 'DEVELOPMENT_TEAM' ios/Runner.xcodeproj/project.pbxproj; then
+              /usr/bin/sed -i '' \
+                "s/PRODUCT_BUNDLE_IDENTIFIER = $IOS_BUNDLE_ID;/PRODUCT_BUNDLE_IDENTIFIER = $IOS_BUNDLE_ID;\\
+\\t\\t\\t\\tDEVELOPMENT_TEAM = $APPLE_TEAM_ID;/g" \
+                ios/Runner.xcodeproj/project.pbxproj
+            fi
+          fi
+
+      - name: Phase — pre-pod
+        run: echo "::notice title=Phase timing::pre-pod $(($(date +%s) - ${{ steps.t0.outputs.started_at }}))s"
+
+      - name: pod install
+        working-directory: apps/mobile/ios
+        run: |
+          set -euxo pipefail
+          pod install --repo-update
+
+      - name: Phase — pods done
+        run: echo "::notice title=Phase timing::pods-done $(($(date +%s) - ${{ steps.t0.outputs.started_at }}))s"
+
+      - name: Build signed IPA
+        id: ipa
+        run: |
+          set -euxo pipefail
+          flutter build ipa \
+            --release \
+            --export-options-plist=ios/ExportOptions.plist \
+            --dart-define=APP_DEEP_LINK_SCHEME=moneycontrol \
+            --build-number=${{ github.run_number }}
+          ls -la build/ios/ipa/
+
+      - name: Phase — ipa built
+        id: t_ipa_built
+        run: |
+          dur=$(($(date +%s) - ${{ steps.t0.outputs.started_at }}))
+          echo "::notice title=Phase timing::ipa-built ${dur}s"
+          echo "duration=$dur" >> "$GITHUB_OUTPUT"
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MoneyControl-ipa-${{ github.run_number }}
+          path: apps/mobile/build/ios/ipa/*.ipa
+          retention-days: 14
+          if-no-files-found: error
+
+      - name: Upload build logs on success or failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs-${{ github.run_number }}
+          path: |
+            apps/mobile/build/ios/archive/Runner.xcarchive/Info.plist
+            apps/mobile/build/ios/ipa/ExportOptions.plist
+            apps/mobile/ios/Flutter/Release.xcconfig
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Upload to TestFlight (manual only)
+        if: github.event_name == 'workflow_dispatch' && inputs.upload_testflight == true
+        env:
+          APPSTORE_API_KEY_ID: ${{ secrets.APPSTORE_API_KEY_ID }}
+          APPSTORE_API_ISSUER_ID: ${{ secrets.APPSTORE_API_ISSUER_ID }}
+          APPSTORE_API_PRIVATE_KEY: ${{ secrets.APPSTORE_API_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.appstoreconnect/private_keys"
+          KEY_PATH="$HOME/.appstoreconnect/private_keys/AuthKey_${APPSTORE_API_KEY_ID}.p8"
+          printf '%s' "$APPSTORE_API_PRIVATE_KEY" > "$KEY_PATH"
+          chmod 600 "$KEY_PATH"
+          IPA=$(ls build/ios/ipa/*.ipa | head -1)
+          echo "Uploading $IPA via xcrun altool"
+          xcrun altool --upload-app \
+            --type ios \
+            --file "$IPA" \
+            --apiKey "$APPSTORE_API_KEY_ID" \
+            --apiIssuer "$APPSTORE_API_ISSUER_ID"
+
+      - name: Cleanup signing material
+        if: always()
+        run: |
+          set +e
+          security delete-keychain "$KEYCHAIN_PATH" || true
+          rm -f "$RUNNER_TEMP/build_certificate.p12" "$RUNNER_TEMP/build_pp.mobileprovision" || true
+          rm -f "$HOME/.appstoreconnect/private_keys/AuthKey_"*.p8 || true
+
+      - name: Report total build duration
+        if: always()
+        run: |
+          end=$(date +%s)
+          start=${{ steps.t0.outputs.started_at }}
+          duration=$((end - start))
+          mins=$((duration / 60))
+          secs=$((duration % 60))
+          echo "::notice title=iOS build total::${mins}m ${secs}s"
+          echo "## iOS build timing" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "* total: **${mins}m ${secs}s**" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Look for individual ::notice lines above to see per-phase durations." >> "$GITHUB_STEP_SUMMARY"

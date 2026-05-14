@@ -1,0 +1,18 @@
+include: package:flutter_lints/flutter.yaml
+
+analyzer:
+  errors:
+    # Tighten a few from warning to error so red CI catches them early.
+    invalid_annotation_target: ignore
+  exclude:
+    - build/**
+    - ios/**
+
+linter:
+  rules:
+    # Defaults from flutter_lints are good; only tweak when we need to.
+    prefer_const_constructors: true
+    prefer_const_literals_to_create_immutables: true
+    sort_child_properties_last: true
+    avoid_print: true
+    unawaited_futures: true

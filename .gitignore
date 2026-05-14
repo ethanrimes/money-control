@@ -51,3 +51,33 @@ _inspect.*
 _workbook.xml
 _strings.xml
 _sheet*.xml
+
+# Flutter / Dart (apps/mobile)
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+pubspec.lock
+**/Generated.xcconfig
+**/flutter_export_environment.sh
+**/ServiceDefinitions.json
+**/GeneratedPluginRegistrant.*
+ios/.symlinks/
+ios/Flutter/App.framework/
+ios/Flutter/Flutter.framework/
+ios/Flutter/Flutter.podspec
+ios/Flutter/Generated.xcconfig
+ios/Flutter/ephemeral/
+ios/Flutter/flutter_export_environment.sh
+ios/Pods/
+ios/Podfile.lock
+ios/Runner.xcworkspace/xcuserdata/
+ios/Runner.xcodeproj/xcuserdata/
+ios/Runner.xcodeproj/project.xcworkspace/xcuserdata/
+**/*.ipa
+**/*.app.dSYM.zip
+**/*.app.zip
+build/
+
+# Flutter local env (NEVER commit real values)
+apps/mobile/.env

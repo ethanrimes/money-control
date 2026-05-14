@@ -4,7 +4,8 @@
   "private": true,
   "description": "Personal finance control plane: web + mobile dashboards over Teller bank data.",
   "workspaces": [
-    "apps/*",
+    "apps/web",
+    "apps/server",
     "packages/*"
   ],
   "scripts": {
@@ -14,7 +15,6 @@
     "db:seed": "npm run -w @moneycontrol/db seed",
     "dev:server": "npm run -w @moneycontrol/server dev",
     "dev:web": "npm run -w @moneycontrol/web dev",
-    "dev:mobile": "npm run -w @moneycontrol/mobile start",
     "kill-ports": "node scripts/kill-ports.mjs",
     "clean:web": "node -e \"require('node:fs').rmSync('apps/web/.next', { recursive: true, force: true }); console.log('apps/web/.next deleted')\"",
     "typecheck": "npm run -ws --if-present typecheck",
