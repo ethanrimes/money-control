@@ -1,0 +1,21 @@
+name: Hello probe
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/hello.yml"
+  workflow_dispatch:
+
+jobs:
+  hello:
+    runs-on: macos-latest
+    environment: Production
+    permissions:
+      contents: read
+    steps:
+      - name: Hello
+        run: |
+          echo "team=${{ vars.APPLE_TEAM_ID }}"
+          echo "bundle=${{ vars.IOS_BUNDLE_ID }}"
+          test -n "${{ secrets.KEYCHAIN_PASSWORD }}" && echo "secret present"
