@@ -115,12 +115,24 @@ jobs:
           decode_secret BUILD_CERTIFICATE_BASE64       "$CERT_PATH"
           decode_secret BUILD_PROVISION_PROFILE_BASE64 "$PP_PATH"
 
-          # Quick CMS sanity check so the failure mode is "bad provisioning
-          # profile" instead of "mystery error 200 lines later".
-          if ! security cms -D -i "$PP_PATH" > /dev/null 2>&1; then
-            echo "FATAL: provisioning profile didn't parse as a CMS blob." >&2
-            echo "First 200 bytes for debug:" >&2
-            head -c 200 "$PP_PATH" | xxd >&2 || true
+          # Diagnose the profile *before* anything else touches it. `security
+          # cms -D` has been observed to exit 0 while writing nothing to
+          # stdout when the input isn't actually a CMS-signed blob (e.g. the
+          # user base64-encoded a PEM file, an XML plist, or accidentally
+          # the .p12). Use the actual decoded output, not the exit code.
+          PP_PLIST="$RUNNER_TEMP/pp.plist"
+          security cms -D -i "$PP_PATH" -o "$PP_PLIST" 2>&1 || true
+          if [ ! -s "$PP_PLIST" ]; then
+            echo "FATAL: security cms produced empty output from $PP_PATH" >&2
+            echo "PP_PATH size: $(stat -f%z "$PP_PATH") bytes" >&2
+            echo "First 64 bytes (hex):" >&2
+            head -c 64 "$PP_PATH" | xxd >&2 || true
+            echo "First 80 bytes (printable):" >&2
+            head -c 80 "$PP_PATH" | cat -v >&2 || true
+            echo "" >&2
+            echo "Expected: a binary CMS-signed PKCS#7 blob starting with 30 82 ..." >&2
+            echo "If you see <?xml or -----BEGIN, the .mobileprovision was already" >&2
+            echo "extracted; the secret should be the *binary* file's base64." >&2
             exit 1
           fi
 
@@ -134,8 +146,9 @@ jobs:
 
           PROFILES_DIR="$HOME/Library/MobileDevice/Provisioning Profiles"
           mkdir -p "$PROFILES_DIR"
-          UUID=$(security cms -D -i "$PP_PATH" | /usr/libexec/PlistBuddy -c 'Print :UUID' /dev/stdin)
-          NAME=$(security cms -D -i "$PP_PATH" | /usr/libexec/PlistBuddy -c 'Print :Name' /dev/stdin)
+          # Re-use the decoded plist from the sanity check.
+          UUID=$(/usr/libexec/PlistBuddy -c 'Print :UUID' "$PP_PLIST")
+          NAME=$(/usr/libexec/PlistBuddy -c 'Print :Name' "$PP_PLIST")
           cp "$PP_PATH" "$PROFILES_DIR/$UUID.mobileprovision"
 
           {
