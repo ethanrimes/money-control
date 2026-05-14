@@ -82,8 +82,47 @@ jobs:
           PP_PATH="$RUNNER_TEMP/build_pp.mobileprovision"
           KEYCHAIN_PATH="$RUNNER_TEMP/app-signing.keychain-db"
 
-          echo -n "$BUILD_CERTIFICATE_BASE64" | base64 --decode -o "$CERT_PATH"
-          echo -n "$BUILD_PROVISION_PROFILE_BASE64" | base64 --decode -o "$PP_PATH"
+          # macOS `base64 --decode` silently produces a zero-byte file when the
+          # input isn't valid base64 (e.g. someone uploaded the raw .p12 /
+          # .mobileprovision bytes as the secret value instead of base64).
+          # Decode strictly, then sanity-check the size and fall back to a
+          # whitespace-tolerant decode if needed.
+          decode_secret() {
+            local var_name="$1"
+            local out_path="$2"
+            local payload="${!var_name}"
+            if [ -z "$payload" ]; then
+              echo "FATAL: secret $var_name is unset or empty" >&2
+              exit 1
+            fi
+            # Try strict decode first.
+            printf '%s' "$payload" | base64 --decode -o "$out_path" 2>/dev/null || true
+            if [ ! -s "$out_path" ]; then
+              # Strip whitespace + retry.
+              printf '%s' "$payload" | tr -d '\r\n \t' | base64 --decode -o "$out_path" 2>/dev/null || true
+            fi
+            if [ ! -s "$out_path" ]; then
+              echo "FATAL: $var_name decoded to a zero-byte file. Is the secret value really base64?" >&2
+              echo "Hint: re-encode with:" >&2
+              echo "  base64 -i your.p12 | pbcopy   # macOS" >&2
+              echo "  [Convert]::ToBase64String([IO.File]::ReadAllBytes('your.p12')) | Set-Clipboard   # PowerShell" >&2
+              exit 1
+            fi
+            local size
+            size=$(stat -f%z "$out_path" 2>/dev/null || stat -c%s "$out_path")
+            echo "Decoded $var_name → $out_path ($size bytes)"
+          }
+          decode_secret BUILD_CERTIFICATE_BASE64       "$CERT_PATH"
+          decode_secret BUILD_PROVISION_PROFILE_BASE64 "$PP_PATH"
+
+          # Quick CMS sanity check so the failure mode is "bad provisioning
+          # profile" instead of "mystery error 200 lines later".
+          if ! security cms -D -i "$PP_PATH" > /dev/null 2>&1; then
+            echo "FATAL: provisioning profile didn't parse as a CMS blob." >&2
+            echo "First 200 bytes for debug:" >&2
+            head -c 200 "$PP_PATH" | xxd >&2 || true
+            exit 1
+          fi
 
           security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
           security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
