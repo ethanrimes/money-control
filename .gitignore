@@ -29,8 +29,8 @@ unified_statements*.xlsx
 # code; keep the whole folder local.
 csv/
 
-# local data
-data/
+# local data — anchored to root so apps/mobile/lib/data/ is NOT ignored
+/data/
 *.db
 *.db-journal
 *.sqlite
