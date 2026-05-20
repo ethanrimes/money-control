@@ -28,11 +28,17 @@ export default function LoginForm() {
         router.replace(next);
         router.refresh();
       } else {
+        // Use NEXT_PUBLIC_SITE_URL so email confirmation links always point at
+        // the deployed app (Vercel). Falling back to window.location.origin
+        // would send the user to localhost when developing, which can't serve
+        // the callback once the email is clicked from a phone or other device.
+        const siteUrl =
+          process.env.NEXT_PUBLIC_SITE_URL || window.location.origin;
         const { data, error } = await supabase.auth.signUp({
           email,
           password,
           options: {
-            emailRedirectTo: `${window.location.origin}/auth/callback?next=${encodeURIComponent(next)}`,
+            emailRedirectTo: `${siteUrl}/auth/callback?next=${encodeURIComponent(next)}`,
           },
         });
         if (error) throw error;

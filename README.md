@@ -41,6 +41,35 @@ npm run dev:mobile     # Expo dev server
 - `balances` — point-in-time per-account
 - `budget_settings` — monthly savings target
 
+## Auth redirect configuration
+
+Supabase's hosted **Site URL** + **Redirect URLs** govern where confirmation
+emails, magic links, and OAuth callbacks send the user. If they point at
+`localhost`, signing in from a phone or any other device fails.
+
+The source of truth is `supabase/config.toml`. If you run the Supabase CLI:
+
+```powershell
+supabase link --project-ref nkuuorwahqxugupiurub
+supabase config push
+```
+
+Otherwise (or in addition), mirror the same values in the Dashboard at
+**Authentication → URL Configuration**:
+
+- **Site URL**: `https://money-control-web.vercel.app`
+- **Redirect URLs** (one per line):
+  - `https://money-control-web.vercel.app/auth/callback`
+  - `https://money-control-web.vercel.app/**`
+  - `https://money-control-web-*.vercel.app/auth/callback` (Vercel previews)
+  - `https://money-control-web-*.vercel.app/**`
+  - `http://localhost:3000/auth/callback` (local dev)
+  - `http://localhost:3000/**`
+  - `moneycontrol://login-callback` (iOS deep link)
+
+The web app also needs `NEXT_PUBLIC_SITE_URL=https://money-control-web.vercel.app`
+in Vercel's project env vars so signup emails embed the canonical host.
+
 ## Teller setup
 
 Two pieces are needed before the "Link account" button in the dashboard does anything:

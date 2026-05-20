@@ -1,0 +1,59 @@
+# =============================================================================
+# Supabase project config.
+#
+# This file is the source of truth for auth redirect configuration. The
+# *hosted* project (nkuuorwahqxugupiurub) reads these via `supabase link` +
+# `supabase config push` — and these same values MUST be reflected in the
+# Dashboard under Authentication → URL Configuration if you don't run the CLI.
+#
+# Mis-configured site_url is the most common cause of the "auth email sent me
+# to localhost" failure: even when the client passes `emailRedirectTo`,
+# Supabase's email template substitutes site_url for {{ .SiteURL }} placeholders
+# and only honors redirect targets that match one of the entries below.
+# =============================================================================
+
+project_id = "money-control"
+
+[auth]
+# Canonical user-facing URL of the web app. All auth emails ({{ .SiteURL }})
+# and the default OAuth/magic-link redirect resolve against this.
+site_url = "https://money-control-web.vercel.app"
+
+# Every URL the auth server is allowed to redirect to after sign-up
+# confirmation, magic link, password reset, or OAuth callback. Anything not
+# matching one of these will be rejected and the user kicked back to site_url.
+#
+# Wildcards are glob-style. Keep this list as tight as is practical.
+additional_redirect_urls = [
+  # Web — production
+  "https://money-control-web.vercel.app/auth/callback",
+  "https://money-control-web.vercel.app/**",
+  # Web — Vercel preview deployments (per-branch)
+  "https://money-control-web-*.vercel.app/auth/callback",
+  "https://money-control-web-*.vercel.app/**",
+  # Web — local dev
+  "http://localhost:3000/auth/callback",
+  "http://localhost:3000/**",
+  # iOS (Flutter) deep link — must match CFBundleURLSchemes in
+  # apps/mobile/ios/Runner/Info.plist and AppConfig.authRedirectUrl.
+  "moneycontrol://login-callback",
+]
+
+# Email confirmation is required for sign-up — keep this on so that the
+# redirect flow above is actually exercised (otherwise users land in a session
+# directly and the misconfig stays hidden).
+#
+# max_frequency + otp_length are pinned to the values that the hosted project
+# was previously running with (60s between sends, 8-digit OTPs). The CLI fills
+# in its own weaker defaults (1s / 6) for any field we leave unset, so be
+# explicit.
+[auth.email]
+enable_confirmations = true
+max_frequency = "1m0s"
+otp_length = 8
+
+# Preserve the MFA TOTP enrollment setting the hosted project had before
+# `supabase config push` overwrote it with the CLI default of false/false.
+[auth.mfa.totp]
+enroll_enabled = true
+verify_enabled = true
