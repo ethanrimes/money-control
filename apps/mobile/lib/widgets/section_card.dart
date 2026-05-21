@@ -12,6 +12,7 @@ class SectionCard extends StatelessWidget {
     this.subtitle,
     this.trailing,
     this.padding = const EdgeInsets.all(16),
+    this.onTap,
   });
 
   final String? title;
@@ -19,42 +20,48 @@ class SectionCard extends StatelessWidget {
   final Widget? trailing;
   final Widget child;
   final EdgeInsetsGeometry padding;
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return Card(
-      child: Padding(
-        padding: padding,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            if (title != null || trailing != null) ...[
-              Row(
-                children: [
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        if (title != null)
-                          Text(title!, style: theme.textTheme.titleLarge),
-                        if (subtitle != null) ...[
-                          const SizedBox(height: 2),
-                          Text(subtitle!, style: theme.textTheme.bodySmall),
-                        ],
+    final inner = Padding(
+      padding: padding,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          if (title != null || trailing != null) ...[
+            Row(
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      if (title != null)
+                        Text(title!, style: theme.textTheme.titleLarge),
+                      if (subtitle != null) ...[
+                        const SizedBox(height: 2),
+                        Text(subtitle!, style: theme.textTheme.bodySmall),
                       ],
-                    ),
+                    ],
                   ),
-                  if (trailing != null) trailing!,
-                ],
-              ),
+                ),
+                if (trailing != null) trailing!,
+              ],
+            ),
+            if (child is! SizedBox || (child as SizedBox).height != 0)
               const SizedBox(height: 12),
-            ],
-            child,
           ],
-        ),
+          child,
+        ],
       ),
+    );
+    return Card(
+      clipBehavior: onTap != null ? Clip.antiAlias : Clip.none,
+      child: onTap == null
+          ? inner
+          : InkWell(onTap: onTap, child: inner),
     );
   }
 }

@@ -56,6 +56,29 @@ class MoneyControlRepo {
     );
   }
 
+  /// Create a manual account (no Teller/Plaid linkage). Defaults `subtype`
+  /// to a non-null sentinel so `Account.isSeeded` returns false — i.e. it
+  /// shows up as a manual account, not a seeded/imported one.
+  Future<Account> createManualAccount({
+    required String name,
+    AccountType type = AccountType.depository,
+  }) async {
+    final row = await _db
+        .from('accounts')
+        .insert({
+          'name': name,
+          'type': type.name,
+          'subtype': 'manual',
+        })
+        .select(
+          'id, name, type, subtype, institution, last_four, '
+          'teller_enrollment_id, plaid_item_id, '
+          'balances ( current, as_of_date )',
+        )
+        .single();
+    return Account.fromJson(row);
+  }
+
   // ---------------------------------------------------------------------------
   // Categories
   // ---------------------------------------------------------------------------
@@ -216,5 +239,61 @@ class MoneyControlRepo {
         .select()
         .single();
     return BudgetSettings.fromJson(row);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Linked institutions (Teller / Plaid)
+  // ---------------------------------------------------------------------------
+
+  /// Drop a Teller enrollment. The schema's `on delete cascade` on
+  /// `accounts.teller_enrollment_id` also drops every associated account
+  /// (and through them, balances/transactions).
+  Future<void> disconnectTellerEnrollment(int enrollmentId) async {
+    await _db.from('teller_enrollments').delete().eq('id', enrollmentId);
+  }
+
+  /// Drop a Plaid item — same cascade story as Teller above.
+  Future<void> disconnectPlaidItem(int plaidItemId) async {
+    await _db.from('plaid_items').delete().eq('id', plaidItemId);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Categorization backfill (mobile-only port of the web server logic)
+  // ---------------------------------------------------------------------------
+
+  /// After categorizing one transaction, find every *other* uncategorized
+  /// transaction whose description matches (case-insensitive, trimmed) and
+  /// stamp the same (category, subcategory) on them. Returns the number of
+  /// rows updated (excluding the originating one).
+  ///
+  /// The web app has equivalent logic on the server; this method gives the
+  /// iOS app parity by running it from the client over RLS-scoped queries.
+  Future<int> backfillCategoryByDescription({
+    required int sourceTxnId,
+    required String description,
+    int? categoryId,
+    int? subcategoryId,
+  }) async {
+    final needle = description.trim();
+    if (needle.isEmpty) return 0;
+    // PostgREST `ilike` does case-insensitive matching. Escape any wildcards
+    // the user-entered description might contain so we get an exact match.
+    final escaped = needle.replaceAll(r'\', r'\\').replaceAll('%', r'\%').replaceAll('_', r'\_');
+    final rows = await _db
+        .from('transactions')
+        .select('id')
+        .filter('category_id', 'is', null)
+        .neq('id', sourceTxnId)
+        .ilike('description', escaped);
+    final ids = (rows as List)
+        .map((e) => (e as Map<String, dynamic>)['id'] as int)
+        .toList();
+    if (ids.isEmpty) return 0;
+    await _db.from('transactions').update({
+      'category_id': categoryId,
+      'subcategory_id': subcategoryId,
+      'updated_at': DateTime.now().toUtc().toIso8601String(),
+    }).inFilter('id', ids);
+    return ids.length;
   }
 }

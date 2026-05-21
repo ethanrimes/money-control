@@ -15,7 +15,9 @@ class TransactionsPage extends StatefulWidget {
   State<TransactionsPage> createState() => _TransactionsPageState();
 }
 
-enum _Period { all, ytd, m1, m3, m6 }
+enum _Period { all, ytd, m1, m3, m6, custom }
+
+enum _SortKey { date, amount, description }
 
 class _TransactionsPageState extends State<TransactionsPage> {
   String _text = '';
@@ -23,13 +25,15 @@ class _TransactionsPageState extends State<TransactionsPage> {
   int? _categoryFilter; // null = all, -1 = uncategorized
   bool _uncategorizedCat = false;
   _Period _period = _Period.all;
+  DateTimeRange? _customRange;
+  _SortKey _sortKey = _SortKey.date;
+  bool _sortDesc = true;
   final Set<int> _selected = <int>{};
 
   @override
   Widget build(BuildContext context) {
     final store = context.watch<DashboardStore>();
-    final theme = Theme.of(context);
-    final visible = _filter(store.transactions);
+    final visible = _sort(_filter(store.transactions));
 
     return SafeArea(
       child: CustomScrollView(
@@ -37,6 +41,11 @@ class _TransactionsPageState extends State<TransactionsPage> {
           SliverAppBar.large(
             title: const Text('Transactions'),
             actions: [
+              IconButton(
+                tooltip: 'Sort',
+                icon: const Icon(CupertinoIcons.arrow_up_arrow_down),
+                onPressed: _openSortSheet,
+              ),
               IconButton(
                 tooltip: 'Refresh',
                 icon: const Icon(CupertinoIcons.arrow_clockwise),
@@ -50,12 +59,13 @@ class _TransactionsPageState extends State<TransactionsPage> {
               child: SectionCard(
                 title: 'Filters',
                 subtitle:
-                    '${visible.length} of ${store.transactions.length} shown',
+                    '${visible.length} of ${store.transactions.length} shown · sorted by ${_sortLabel(_sortKey)} ${_sortDesc ? "↓" : "↑"}',
                 child: _Filters(
                   text: _text,
                   onTextChanged: (v) => setState(() => _text = v),
                   period: _period,
-                  onPeriod: (p) => setState(() => _period = p),
+                  customRange: _customRange,
+                  onPeriod: _setPeriod,
                   accounts: _distinctAccounts(store.transactions),
                   accountFilter: _accountFilter,
                   onAccount: (a) => setState(() => _accountFilter = a),
@@ -87,7 +97,7 @@ class _TransactionsPageState extends State<TransactionsPage> {
               child: Center(child: CircularProgressIndicator()),
             )
           else if (visible.isEmpty)
-            SliverFillRemaining(
+            const SliverFillRemaining(
               hasScrollBody: false,
               child: EmptyState(
                 icon: CupertinoIcons.tray,
@@ -132,6 +142,74 @@ class _TransactionsPageState extends State<TransactionsPage> {
     );
   }
 
+  Future<void> _setPeriod(_Period p) async {
+    if (p == _Period.custom) {
+      final now = DateTime.now();
+      final initial = _customRange ??
+          DateTimeRange(
+            start: DateTime(now.year, now.month - 1, now.day),
+            end: now,
+          );
+      final picked = await showDateRangePicker(
+        context: context,
+        firstDate: DateTime(2000),
+        lastDate: DateTime(now.year + 1, 12, 31),
+        initialDateRange: initial,
+      );
+      if (picked != null) {
+        setState(() {
+          _period = _Period.custom;
+          _customRange = picked;
+        });
+      }
+    } else {
+      setState(() {
+        _period = p;
+        _customRange = null;
+      });
+    }
+  }
+
+  Future<void> _openSortSheet() async {
+    final result = await showModalBottomSheet<({_SortKey key, bool desc})>(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Padding(
+              padding: EdgeInsets.fromLTRB(16, 16, 16, 8),
+              child: Text('Sort transactions',
+                  style: TextStyle(fontWeight: FontWeight.w600)),
+            ),
+            for (final key in _SortKey.values) ...[
+              ListTile(
+                leading: const Icon(Icons.south),
+                title: Text('${_sortLabel(key)} (newest/largest first)'),
+                selected: _sortKey == key && _sortDesc,
+                onTap: () =>
+                    Navigator.of(ctx).pop((key: key, desc: true)),
+              ),
+              ListTile(
+                leading: const Icon(Icons.north),
+                title: Text('${_sortLabel(key)} (oldest/smallest first)'),
+                selected: _sortKey == key && !_sortDesc,
+                onTap: () =>
+                    Navigator.of(ctx).pop((key: key, desc: false)),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+    if (result != null) {
+      setState(() {
+        _sortKey = result.key;
+        _sortDesc = result.desc;
+      });
+    }
+  }
+
   Future<void> _openCategorize(AppTransaction t) async {
     final store = context.read<DashboardStore>();
     final result = await showModalBottomSheet<_CategorizeResult>(
@@ -152,6 +230,22 @@ class _TransactionsPageState extends State<TransactionsPage> {
         categoryId: result.categoryId,
         subcategoryId: result.subcategoryId,
       );
+      // Mirror the web app's auto-backfill: any other uncategorized
+      // transaction with the same description gets the same labels.
+      final backfilled = await repo.backfillCategoryByDescription(
+        sourceTxnId: t.id,
+        description: t.description,
+        categoryId: result.categoryId,
+        subcategoryId: result.subcategoryId,
+      );
+      if (mounted && backfilled > 0) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+                'Also categorized $backfilled matching uncategorized transaction${backfilled == 1 ? "" : "s"}.'),
+          ),
+        );
+      }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -192,7 +286,7 @@ class _TransactionsPageState extends State<TransactionsPage> {
   List<AppTransaction> _filter(List<AppTransaction> all) {
     final today = DateTime.now();
     String? fromIso;
-    final todayIso = today.toIso8601String().substring(0, 10);
+    String? toIso;
     String offsetIso(int months) {
       final d = DateTime(today.year, today.month - months, today.day);
       return d.toIso8601String().substring(0, 10);
@@ -200,7 +294,6 @@ class _TransactionsPageState extends State<TransactionsPage> {
 
     switch (_period) {
       case _Period.all:
-        fromIso = null;
         break;
       case _Period.ytd:
         fromIso = '${today.year}-01-01';
@@ -214,7 +307,15 @@ class _TransactionsPageState extends State<TransactionsPage> {
       case _Period.m6:
         fromIso = offsetIso(6);
         break;
+      case _Period.custom:
+        final r = _customRange;
+        if (r != null) {
+          fromIso = r.start.toIso8601String().substring(0, 10);
+          toIso = r.end.toIso8601String().substring(0, 10);
+        }
+        break;
     }
+    final todayIso = today.toIso8601String().substring(0, 10);
 
     final q = _text.trim().toLowerCase();
     return all.where((r) {
@@ -230,14 +331,47 @@ class _TransactionsPageState extends State<TransactionsPage> {
       if (_accountFilter != null && r.accountId != _accountFilter) return false;
       if (_uncategorizedCat && r.categoryId != null) return false;
       if (_categoryFilter != null) {
-        if (r.categoryId != _categoryFilter && r.subcategoryId != _categoryFilter) {
+        if (r.categoryId != _categoryFilter &&
+            r.subcategoryId != _categoryFilter) {
           return false;
         }
       }
       if (fromIso != null && r.date.compareTo(fromIso) < 0) return false;
-      if (r.date.compareTo(todayIso) > 0) return false; // ignore future-dated
+      final upper = toIso ?? todayIso;
+      if (r.date.compareTo(upper) > 0) return false;
       return true;
     }).toList();
+  }
+
+  List<AppTransaction> _sort(List<AppTransaction> rows) {
+    rows.sort((a, b) {
+      int cmp;
+      switch (_sortKey) {
+        case _SortKey.date:
+          cmp = a.date.compareTo(b.date);
+          if (cmp == 0) cmp = a.id.compareTo(b.id);
+          break;
+        case _SortKey.amount:
+          cmp = a.amount.compareTo(b.amount);
+          break;
+        case _SortKey.description:
+          cmp = a.description.toLowerCase().compareTo(b.description.toLowerCase());
+          break;
+      }
+      return _sortDesc ? -cmp : cmp;
+    });
+    return rows;
+  }
+
+  static String _sortLabel(_SortKey k) {
+    switch (k) {
+      case _SortKey.date:
+        return 'Date';
+      case _SortKey.amount:
+        return 'Amount';
+      case _SortKey.description:
+        return 'Description';
+    }
   }
 
   List<({int id, String name})> _distinctAccounts(List<AppTransaction> rows) {
@@ -258,6 +392,7 @@ class _Filters extends StatelessWidget {
     required this.text,
     required this.onTextChanged,
     required this.period,
+    required this.customRange,
     required this.onPeriod,
     required this.accounts,
     required this.accountFilter,
@@ -271,6 +406,7 @@ class _Filters extends StatelessWidget {
   final String text;
   final ValueChanged<String> onTextChanged;
   final _Period period;
+  final DateTimeRange? customRange;
   final ValueChanged<_Period> onPeriod;
   final List<({int id, String name})> accounts;
   final int? accountFilter;
@@ -300,7 +436,9 @@ class _Filters extends StatelessWidget {
           children: [
             for (final p in _Period.values)
               ChoiceChip(
-                label: Text(_periodLabel(p)),
+                label: Text(p == _Period.custom && customRange != null
+                    ? '${_fmtShort(customRange!.start)} → ${_fmtShort(customRange!.end)}'
+                    : _periodLabel(p)),
                 selected: period == p,
                 onSelected: (_) => onPeriod(p),
               ),
@@ -364,6 +502,8 @@ class _Filters extends StatelessWidget {
         return '3 mo';
       case _Period.m6:
         return '6 mo';
+      case _Period.custom:
+        return 'Custom…';
     }
   }
 }
@@ -372,6 +512,9 @@ class _Filters extends StatelessWidget {
 /// public `CategoryNode` directly (avoids cyclic-import risk if widgets are
 /// later moved).
 typedef CategoryNodeLite = CategoryNode;
+
+String _fmtShort(DateTime d) =>
+    '${d.year}-${d.month.toString().padLeft(2, "0")}-${d.day.toString().padLeft(2, "0")}';
 
 class _TxnTile extends StatelessWidget {
   const _TxnTile({
