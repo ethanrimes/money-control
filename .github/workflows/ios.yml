@@ -233,8 +233,8 @@ jobs:
           retention-days: 14
           if-no-files-found: error
 
-      - name: Upload to TestFlight (manual only)
-        if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.upload_testflight == 'true' }}
+      - name: Upload to TestFlight
+        if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.event.inputs.upload_testflight == 'true') }}
         env:
           APPSTORE_API_KEY_ID: ${{ secrets.APPSTORE_API_KEY_ID }}
           APPSTORE_API_ISSUER_ID: ${{ secrets.APPSTORE_API_ISSUER_ID }}
