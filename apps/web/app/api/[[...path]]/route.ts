@@ -8,6 +8,7 @@
 // cookie never has to be parsed by Hono, and Hono stays portable (it still
 // runs standalone in dev via apps/server/src/index.ts).
 
+import { createClient } from "@supabase/supabase-js";
 import { app } from "@moneycontrol/server/app";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 
@@ -15,11 +16,36 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 async function handler(req: Request): Promise<Response> {
-  const supabase = await createSupabaseServerClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) {
+  // Two-mode auth so the same API works for the Next.js web client (which
+  // sends Supabase session cookies) and the mobile app (which sends an
+  // Authorization: Bearer <supabase-jwt> header).
+  let userId: string | null = null;
+
+  const authHeader = req.headers.get("authorization") ?? req.headers.get("Authorization");
+  if (authHeader?.toLowerCase().startsWith("bearer ")) {
+    const token = authHeader.slice(7).trim();
+    if (token) {
+      // Verify the JWT by asking Supabase who it belongs to. This goes against
+      // GoTrue, not the project DB, so it's cheap and stateless on our side.
+      const client = createClient(
+        process.env.NEXT_PUBLIC_SUPABASE_URL!,
+        process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+        { auth: { persistSession: false, autoRefreshToken: false } },
+      );
+      const { data, error } = await client.auth.getUser(token);
+      if (!error && data.user) userId = data.user.id;
+    }
+  }
+
+  if (!userId) {
+    const supabase = await createSupabaseServerClient();
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    if (user) userId = user.id;
+  }
+
+  if (!userId) {
     return new Response(JSON.stringify({ error: "unauthenticated" }), {
       status: 401,
       headers: { "content-type": "application/json" },
@@ -32,7 +58,7 @@ async function handler(req: Request): Promise<Response> {
   url.pathname = url.pathname.replace(/^\/api/, "") || "/";
 
   const headers = new Headers(req.headers);
-  headers.set("x-user-id", user.id);
+  headers.set("x-user-id", userId);
 
   const forwarded = new Request(url.toString(), {
     method: req.method,

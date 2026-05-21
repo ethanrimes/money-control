@@ -649,14 +649,43 @@ class _CategorizeResult {
   final int? subcategoryId;
 }
 
-class _CategorizeSheet extends StatelessWidget {
+class _CategorizeSheet extends StatefulWidget {
   const _CategorizeSheet({required this.transaction, required this.tree});
 
   final AppTransaction? transaction;
   final List<CategoryNodeLite> tree;
 
   @override
+  State<_CategorizeSheet> createState() => _CategorizeSheetState();
+}
+
+class _CategorizeSheetState extends State<_CategorizeSheet> {
+  String _query = '';
+
+  @override
   Widget build(BuildContext context) {
+    final q = _query.trim().toLowerCase();
+    // Filter parent rows: keep when parent matches, or any sub matches.
+    final filtered = q.isEmpty
+        ? widget.tree
+        : widget.tree
+            .map((top) {
+              final parentMatch = top.category.name.toLowerCase().contains(q);
+              final matchingSubs = top.subcategories
+                  .where((s) => s.name.toLowerCase().contains(q))
+                  .toList();
+              if (parentMatch || matchingSubs.isNotEmpty) {
+                return CategoryNodeLite(
+                  category: top.category,
+                  subcategories:
+                      parentMatch ? top.subcategories : matchingSubs,
+                );
+              }
+              return null;
+            })
+            .whereType<CategoryNodeLite>()
+            .toList();
+
     return SafeArea(
       child: DraggableScrollableSheet(
         initialChildSize: 0.85,
@@ -664,52 +693,86 @@ class _CategorizeSheet extends StatelessWidget {
         maxChildSize: 0.95,
         expand: false,
         builder: (ctx, scrollCtl) {
-          return ListView(
-            controller: scrollCtl,
-            padding: const EdgeInsets.fromLTRB(16, 24, 16, 32),
+          return Column(
             children: [
-              if (transaction != null)
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 8),
-                  child: Text(
-                    transaction!.description,
-                    style: Theme.of(context).textTheme.titleLarge,
-                  ),
-                ),
-              Text(
-                'Choose category',
-                style: Theme.of(context).textTheme.bodySmall,
-              ),
-              const SizedBox(height: 8),
-              ListTile(
-                title: const Text('— Uncategorized —'),
-                leading: const Icon(Icons.remove_circle_outline),
-                onTap: () => Navigator.of(context).pop(_CategorizeResult()),
-              ),
-              const Divider(),
-              for (final top in tree) ...[
-                ListTile(
-                  title: Text(top.category.name,
-                      style: const TextStyle(fontWeight: FontWeight.w600)),
-                  onTap: () => Navigator.of(context).pop(
-                    _CategorizeResult(categoryId: top.category.id),
-                  ),
-                ),
-                for (final sub in top.subcategories)
-                  Padding(
-                    padding: const EdgeInsets.only(left: 16),
-                    child: ListTile(
-                      dense: true,
-                      title: Text('↳ ${sub.name}'),
-                      onTap: () => Navigator.of(context).pop(
-                        _CategorizeResult(
-                          categoryId: top.category.id,
-                          subcategoryId: sub.id,
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    if (widget.transaction != null)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 8),
+                        child: Text(
+                          widget.transaction!.description,
+                          style: Theme.of(context).textTheme.titleLarge,
                         ),
                       ),
+                    Text(
+                      'Choose category',
+                      style: Theme.of(context).textTheme.bodySmall,
                     ),
-                  ),
-              ],
+                    const SizedBox(height: 8),
+                    TextField(
+                      autofocus: false,
+                      decoration: const InputDecoration(
+                        hintText: 'Search categories…',
+                        prefixIcon: Icon(Icons.search),
+                      ),
+                      onChanged: (v) => setState(() => _query = v),
+                    ),
+                  ],
+                ),
+              ),
+              Expanded(
+                child: ListView(
+                  controller: scrollCtl,
+                  padding: const EdgeInsets.fromLTRB(16, 4, 16, 32),
+                  children: [
+                    if (q.isEmpty)
+                      ListTile(
+                        title: const Text('— Uncategorized —'),
+                        leading: const Icon(Icons.remove_circle_outline),
+                        onTap: () =>
+                            Navigator.of(context).pop(_CategorizeResult()),
+                      ),
+                    if (q.isEmpty) const Divider(),
+                    if (filtered.isEmpty)
+                      Padding(
+                        padding: const EdgeInsets.all(24),
+                        child: Text(
+                          'No matches for "$_query"',
+                          style: Theme.of(context).textTheme.bodySmall,
+                          textAlign: TextAlign.center,
+                        ),
+                      ),
+                    for (final top in filtered) ...[
+                      ListTile(
+                        title: Text(top.category.name,
+                            style:
+                                const TextStyle(fontWeight: FontWeight.w600)),
+                        onTap: () => Navigator.of(context).pop(
+                          _CategorizeResult(categoryId: top.category.id),
+                        ),
+                      ),
+                      for (final sub in top.subcategories)
+                        Padding(
+                          padding: const EdgeInsets.only(left: 16),
+                          child: ListTile(
+                            dense: true,
+                            title: Text('↳ ${sub.name}'),
+                            onTap: () => Navigator.of(context).pop(
+                              _CategorizeResult(
+                                categoryId: top.category.id,
+                                subcategoryId: sub.id,
+                              ),
+                            ),
+                          ),
+                        ),
+                    ],
+                  ],
+                ),
+              ),
             ],
           );
         },

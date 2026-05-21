@@ -22,6 +22,7 @@ class AppPalette {
 
   static const Color positive = Color(0xFF10B981);
   static const Color negative = Color(0xFFEF4444);
+  static const Color warning = Color(0xFFF59E0B);
 }
 
 class AppTheme {
@@ -66,6 +67,13 @@ class AppTheme {
         type: BottomNavigationBarType.fixed,
         elevation: 0,
       ),
+      navigationBarTheme: NavigationBarThemeData(
+        labelTextStyle: WidgetStateProperty.all(
+          const TextStyle(fontSize: 10.5, fontWeight: FontWeight.w500),
+        ),
+        backgroundColor: AppPalette.lightSurface,
+        indicatorColor: AppPalette.lightAccent.withValues(alpha: 0.15),
+      ),
     );
   }
 
@@ -107,6 +115,13 @@ class AppTheme {
         unselectedItemColor: AppPalette.darkMuted,
         type: BottomNavigationBarType.fixed,
         elevation: 0,
+      ),
+      navigationBarTheme: NavigationBarThemeData(
+        labelTextStyle: WidgetStateProperty.all(
+          const TextStyle(fontSize: 10.5, fontWeight: FontWeight.w500),
+        ),
+        backgroundColor: AppPalette.darkSurface,
+        indicatorColor: AppPalette.darkAccent.withValues(alpha: 0.20),
       ),
     );
   }

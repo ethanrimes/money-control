@@ -3,12 +3,14 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../analytics/analytics.dart';
+import '../data/backend_api.dart';
 import '../data/dashboard_store.dart';
 import '../theme.dart';
 import '../widgets/category_bars.dart';
 import '../widgets/money_text.dart';
 import '../widgets/section_card.dart';
 import '../widgets/spend_chart.dart';
+import 'categories_page.dart';
 
 class DashboardPage extends StatelessWidget {
   const DashboardPage({super.key});
@@ -16,6 +18,7 @@ class DashboardPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final store = context.watch<DashboardStore>();
+    final api = context.read<BackendApi>();
     final theme = Theme.of(context);
     return SafeArea(
       child: CustomScrollView(
@@ -25,14 +28,16 @@ class DashboardPage extends StatelessWidget {
             title: const Text('MoneyControl'),
             actions: [
               IconButton(
-                tooltip: 'Refresh',
+                tooltip: 'Sync banks + refresh',
                 icon: store.loading
                     ? const SizedBox(
                         height: 18,
                         width: 18,
                         child: CircularProgressIndicator(strokeWidth: 2.4))
                     : const Icon(CupertinoIcons.arrow_clockwise),
-                onPressed: store.loading ? null : () => store.refresh(),
+                onPressed: store.loading
+                    ? null
+                    : () => _syncAndRefresh(context, api, store),
               ),
               const SizedBox(width: 4),
             ],
@@ -81,6 +86,36 @@ class DashboardPage extends StatelessWidget {
     final h = t.hour.toString().padLeft(2, '0');
     final m = t.minute.toString().padLeft(2, '0');
     return '$h:$m local';
+  }
+
+  static Future<void> _syncAndRefresh(
+    BuildContext context,
+    BackendApi api,
+    DashboardStore store,
+  ) async {
+    final messenger = ScaffoldMessenger.of(context);
+    // Always do the local refresh first so the user sees the spinner go away
+    // even if the backend sync errors (e.g. backend not deployed).
+    try {
+      final r = await api.syncAll();
+      await store.refresh();
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text(
+            r.transactions == 0
+                ? 'Up to date.'
+                : 'Synced ${r.transactions} new transaction${r.transactions == 1 ? "" : "s"}.',
+          ),
+        ),
+      );
+    } catch (e) {
+      // Fall back to a local-only refresh; the user can still see categorized
+      // data even when the aggregator endpoint is unreachable.
+      await store.refresh();
+      messenger.showSnackBar(
+        SnackBar(content: Text('Local refresh only — bank sync failed: $e')),
+      );
+    }
   }
 }
 
@@ -345,10 +380,23 @@ class _CategoryCardState extends State<_CategoryCard> {
     );
     return SectionCard(
       title: 'Spending by category',
-      subtitle: 'This month vs trailing 6-month average',
-      trailing: _MonthPicker(
-        value: _month,
-        onChanged: (m) => setState(() => _month = m),
+      subtitle:
+          'Absolute spend per category, this month. Orange tick = trailing 6-month average.',
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _MonthPicker(
+            value: _month,
+            onChanged: (m) => setState(() => _month = m),
+          ),
+          IconButton(
+            tooltip: 'Manage categories',
+            icon: const Icon(Icons.tune),
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => const CategoriesPage()),
+            ),
+          ),
+        ],
       ),
       child: CategoryBarChart(bars: bars),
     );

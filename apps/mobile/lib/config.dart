@@ -31,4 +31,12 @@ class AppConfig {
   /// Add the *exact* string below to Supabase Dashboard → Authentication →
   /// URL Configuration → Redirect URLs.
   static String get authRedirectUrl => '$deepLinkScheme://login-callback';
+
+  /// Base URL of the deployed Hono API (mounted at /api on the Vercel-hosted
+  /// Next.js app). Used by the mobile app to call Plaid/Teller endpoints
+  /// that can't run from the device (server-side secrets, mTLS material).
+  static const String apiBaseUrl = String.fromEnvironment(
+    'API_BASE_URL',
+    defaultValue: 'https://money-control-web.vercel.app/api',
+  );
 }

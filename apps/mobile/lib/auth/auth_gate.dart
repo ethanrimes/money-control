@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../data/backend_api.dart';
 import '../data/dashboard_store.dart';
 import '../data/repos.dart';
 import '../pages/shell.dart';
@@ -83,12 +84,14 @@ class _AuthenticatedScope extends StatefulWidget {
 
 class _AuthenticatedScopeState extends State<_AuthenticatedScope> {
   late final MoneyControlRepo _repo;
+  late final BackendApi _api;
   late final DashboardStore _store;
 
   @override
   void initState() {
     super.initState();
     _repo = MoneyControlRepo(Supabase.instance.client);
+    _api = BackendApi();
     _store = DashboardStore(_repo);
     // Initial load.
     WidgetsBinding.instance.addPostFrameCallback((_) => _store.refresh());
@@ -105,6 +108,7 @@ class _AuthenticatedScopeState extends State<_AuthenticatedScope> {
     return MultiProvider(
       providers: [
         Provider<MoneyControlRepo>.value(value: _repo),
+        Provider<BackendApi>.value(value: _api),
         ChangeNotifierProvider<DashboardStore>.value(value: _store),
       ],
       child: const TabShell(),

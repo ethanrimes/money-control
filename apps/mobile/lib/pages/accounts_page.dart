@@ -1,13 +1,14 @@
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'package:url_launcher/url_launcher.dart';
 
+import '../data/backend_api.dart';
 import '../data/dashboard_store.dart';
 import '../data/models.dart';
-import '../theme.dart';
 import '../widgets/money_text.dart';
 import '../widgets/section_card.dart';
+import 'plaid_link_button.dart';
+import 'teller_link_button.dart';
 
 /// Pushed from MorePage. Lists every account — manual, Teller, Plaid — and
 /// lets the user (a) override the latest balance for any account and
@@ -19,31 +20,68 @@ class AccountsPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final store = context.watch<DashboardStore>();
+    final api = context.read<BackendApi>();
     final groups = _groupByInstitution(store.accounts);
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Accounts')),
+      appBar: AppBar(
+        title: const Text('Accounts'),
+        actions: [
+          IconButton(
+            tooltip: 'Sync all',
+            icon: const Icon(CupertinoIcons.arrow_clockwise),
+            onPressed: () => _sync(context, api, store),
+          ),
+        ],
+      ),
       body: SafeArea(
-        child: groups.isEmpty
-            ? const EmptyState(
+        child: ListView(
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
+          children: [
+            _LinkProvidersCard(api: api, store: store),
+            const SizedBox(height: 16),
+            if (groups.isEmpty)
+              const EmptyState(
                 icon: CupertinoIcons.creditcard,
                 title: 'No accounts yet',
-                message: 'Link a bank or add a manual account to get started.',
+                message:
+                    'Link a bank above or add a manual account at the bottom.',
               )
-            : ListView(
-                padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
-                children: [
-                  for (final g in groups) ...[
-                    _InstitutionGroup(group: g, store: store),
-                    const SizedBox(height: 16),
-                  ],
-                  _AddManualAccountCard(store: store),
-                  const SizedBox(height: 16),
-                  _LinkExternalCard(),
-                ],
-              ),
+            else
+              for (final g in groups) ...[
+                _InstitutionGroup(group: g, store: store),
+                const SizedBox(height: 16),
+              ],
+            _AddManualAccountCard(store: store),
+          ],
+        ),
       ),
     );
+  }
+
+  Future<void> _sync(
+    BuildContext context,
+    BackendApi api,
+    DashboardStore store,
+  ) async {
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.showSnackBar(
+      const SnackBar(content: Text('Syncing accounts…')),
+    );
+    try {
+      final r = await api.syncAll();
+      await store.refresh();
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text(
+            'Synced ${r.transactions} new transaction${r.transactions == 1 ? "" : "s"}, '
+            '${r.balances} balance${r.balances == 1 ? "" : "s"} updated.',
+          ),
+        ),
+      );
+    } catch (e) {
+      messenger.showSnackBar(SnackBar(content: Text('Sync failed: $e')));
+    }
   }
 
   static List<_Group> _groupByInstitution(List<Account> accounts) {
@@ -425,26 +463,24 @@ class _NewManual {
   final double balance;
 }
 
-class _LinkExternalCard extends StatelessWidget {
+class _LinkProvidersCard extends StatelessWidget {
+  const _LinkProvidersCard({required this.api, required this.store});
+  final BackendApi api;
+  final DashboardStore store;
+
   @override
   Widget build(BuildContext context) {
     return SectionCard(
       title: 'Link a bank',
       subtitle:
-          'Teller and Plaid setup happens in the web app. Newly linked accounts and transactions appear here automatically after the next refresh.',
-      child: OutlinedButton.icon(
-        icon: const Icon(Icons.open_in_new),
-        label: const Text('Open web app'),
-        onPressed: () async {
-          final uri = Uri.parse('https://money-control-web.vercel.app/');
-          if (!await launchUrl(uri, mode: LaunchMode.externalApplication)) {
-            if (context.mounted) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('Could not open browser')),
-              );
-            }
-          }
-        },
+          'Pick the provider that covers your bank. Linked institutions sync automatically when you tap Refresh.',
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          PlaidLinkButton(api: api, store: store),
+          const SizedBox(height: 12),
+          TellerLinkButton(api: api, store: store),
+        ],
       ),
     );
   }
