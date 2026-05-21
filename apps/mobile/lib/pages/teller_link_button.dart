@@ -162,7 +162,7 @@ class _TellerConnectPageState extends State<_TellerConnectPage> {
   }
 
   void _onMessage(String raw) {
-    Map<String, dynamic>? json;
+    final Map<String, dynamic> json;
     try {
       json = jsonDecode(raw) as Map<String, dynamic>;
     } catch (_) {
