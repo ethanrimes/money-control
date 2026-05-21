@@ -8,9 +8,12 @@ export async function middleware(request: NextRequest) {
 }
 
 export const config = {
-  // Skip Next internals and common static assets. Everything else — including
-  // /api/* — goes through auth.
+  // Skip Next internals, common static assets, and /api/*. The /api wrapper
+  // (apps/web/app/api/[[...path]]/route.ts) does its own auth — it accepts
+  // both Supabase session cookies and `Authorization: Bearer <jwt>` from
+  // the mobile app, so middleware here would just bounce mobile clients to
+  // /login.
   matcher: [
-    "/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico)$).*)",
+    "/((?!api|_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico)$).*)",
   ],
 };
