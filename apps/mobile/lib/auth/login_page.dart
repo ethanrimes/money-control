@@ -15,7 +15,7 @@ class _LoginPageState extends State<LoginPage> {
   final _emailCtrl = TextEditingController();
   final _passwordCtrl = TextEditingController();
   bool _busy = false;
-  bool _isSignUp = false;
+  _Mode _mode = _Mode.signIn;
   String? _error;
   String? _info;
 
@@ -26,6 +26,14 @@ class _LoginPageState extends State<LoginPage> {
     super.dispose();
   }
 
+  void _switchMode(_Mode target) {
+    setState(() {
+      _mode = target;
+      _error = null;
+      _info = null;
+    });
+  }
+
   Future<void> _submit() async {
     setState(() {
       _busy = true;
@@ -34,21 +42,32 @@ class _LoginPageState extends State<LoginPage> {
     });
     try {
       final supa = Supabase.instance.client;
-      if (_isSignUp) {
-        final res = await supa.auth.signUp(
-          email: _emailCtrl.text.trim(),
-          password: _passwordCtrl.text,
-          emailRedirectTo: AppConfig.authRedirectUrl,
-        );
-        if (res.session == null) {
+      switch (_mode) {
+        case _Mode.signIn:
+          await supa.auth.signInWithPassword(
+            email: _emailCtrl.text.trim(),
+            password: _passwordCtrl.text,
+          );
+          break;
+        case _Mode.signUp:
+          final res = await supa.auth.signUp(
+            email: _emailCtrl.text.trim(),
+            password: _passwordCtrl.text,
+            emailRedirectTo: AppConfig.authRedirectUrl,
+          );
+          if (res.session == null) {
+            setState(() => _info =
+                'Check your email to confirm, then sign in. The confirmation link returns you to the app.');
+          }
+          break;
+        case _Mode.forgotPassword:
+          await supa.auth.resetPasswordForEmail(
+            _emailCtrl.text.trim(),
+            redirectTo: AppConfig.authRedirectUrl,
+          );
           setState(() => _info =
-              'Check your email to confirm, then sign in. The confirmation link returns you to the app.');
-        }
-      } else {
-        await supa.auth.signInWithPassword(
-          email: _emailCtrl.text.trim(),
-          password: _passwordCtrl.text,
-        );
+              'Check your email for a password reset link. Tap it on this device to return to the app and set a new password.');
+          break;
       }
     } on AuthException catch (e) {
       setState(() => _error = e.message);
@@ -63,6 +82,25 @@ class _LoginPageState extends State<LoginPage> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
+    final isForgot = _mode == _Mode.forgotPassword;
+    final isSignUp = _mode == _Mode.signUp;
+    final heading = switch (_mode) {
+      _Mode.signIn => 'Welcome back',
+      _Mode.signUp => 'Create account',
+      _Mode.forgotPassword => 'Reset password',
+    };
+    final subtitle = switch (_mode) {
+      _Mode.signIn => 'Sign in to MoneyControl with your email and password.',
+      _Mode.signUp =>
+        'MoneyControl is private. Sign up to keep your data scoped to you.',
+      _Mode.forgotPassword =>
+        "Enter your email and we'll send you a link to set a new password.",
+    };
+    final submitLabel = switch (_mode) {
+      _Mode.signIn => 'Sign in',
+      _Mode.signUp => 'Sign up',
+      _Mode.forgotPassword => 'Send reset link',
+    };
     return Scaffold(
       body: SafeArea(
         child: Center(
@@ -86,14 +124,12 @@ class _LoginPageState extends State<LoginPage> {
                   ),
                   const SizedBox(height: 20),
                   Text(
-                    _isSignUp ? 'Create account' : 'Welcome back',
+                    heading,
                     style: theme.textTheme.displaySmall,
                   ),
                   const SizedBox(height: 6),
                   Text(
-                    _isSignUp
-                        ? 'MoneyControl is private. Sign up to keep your data scoped to you.'
-                        : 'Sign in to MoneyControl with your email and password.',
+                    subtitle,
                     style: theme.textTheme.bodySmall,
                   ),
                   const SizedBox(height: 28),
@@ -108,18 +144,20 @@ class _LoginPageState extends State<LoginPage> {
                       prefixIcon: Icon(Icons.mail_outline),
                     ),
                   ),
-                  const SizedBox(height: 12),
-                  TextField(
-                    controller: _passwordCtrl,
-                    obscureText: true,
-                    autofillHints: _isSignUp
-                        ? const [AutofillHints.newPassword]
-                        : const [AutofillHints.password],
-                    decoration: const InputDecoration(
-                      labelText: 'Password',
-                      prefixIcon: Icon(Icons.lock_outline),
+                  if (!isForgot) ...[
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: _passwordCtrl,
+                      obscureText: true,
+                      autofillHints: isSignUp
+                          ? const [AutofillHints.newPassword]
+                          : const [AutofillHints.password],
+                      decoration: const InputDecoration(
+                        labelText: 'Password',
+                        prefixIcon: Icon(Icons.lock_outline),
+                      ),
                     ),
-                  ),
+                  ],
                   if (_error != null) ...[
                     const SizedBox(height: 12),
                     Text(
@@ -149,21 +187,31 @@ class _LoginPageState extends State<LoginPage> {
                             height: 22,
                             child: CircularProgressIndicator(
                                 strokeWidth: 2.5, color: Colors.white))
-                        : Text(_isSignUp ? 'Sign up' : 'Sign in'),
+                        : Text(submitLabel),
                   ),
                   const SizedBox(height: 14),
-                  TextButton(
-                    onPressed: _busy
-                        ? null
-                        : () => setState(() {
-                              _isSignUp = !_isSignUp;
-                              _error = null;
-                              _info = null;
-                            }),
-                    child: Text(_isSignUp
-                        ? 'Have an account? Sign in'
-                        : 'Need an account? Sign up'),
-                  ),
+                  if (_mode == _Mode.signIn)
+                    TextButton(
+                      onPressed: _busy
+                          ? null
+                          : () => _switchMode(_Mode.forgotPassword),
+                      child: const Text('Forgot password?'),
+                    ),
+                  if (isForgot)
+                    TextButton(
+                      onPressed: _busy ? null : () => _switchMode(_Mode.signIn),
+                      child: const Text('Back to sign in'),
+                    )
+                  else
+                    TextButton(
+                      onPressed: _busy
+                          ? null
+                          : () => _switchMode(
+                              isSignUp ? _Mode.signIn : _Mode.signUp),
+                      child: Text(isSignUp
+                          ? 'Have an account? Sign in'
+                          : 'Need an account? Sign up'),
+                    ),
                   const SizedBox(height: 8),
                   Text(
                     'Your data is scoped to your account via Postgres Row-Level Security. No one but you can read or write your rows.',
@@ -183,3 +231,5 @@ class _LoginPageState extends State<LoginPage> {
     );
   }
 }
+
+enum _Mode { signIn, signUp, forgotPassword }

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -6,6 +8,7 @@ import '../data/dashboard_store.dart';
 import '../data/repos.dart';
 import '../pages/shell.dart';
 import 'login_page.dart';
+import 'reset_password_page.dart';
 
 /// Watches Supabase auth state. When a user signs in, builds the
 /// [DashboardStore] (which holds repo references + cached data) and presents
@@ -21,31 +24,50 @@ class AuthGate extends StatefulWidget {
 
 class _AuthGateState extends State<AuthGate> {
   Session? _session;
-  late final Stream<AuthState> _authStream;
+  // True while the user is in a password-recovery flow (deep link opened from
+  // the reset email). We block the dashboard until they pick a new password,
+  // matching the web app's /auth/reset-password gate.
+  bool _recovering = false;
+  StreamSubscription<AuthState>? _authSub;
 
   @override
   void initState() {
     super.initState();
     final supa = Supabase.instance.client;
     _session = supa.auth.currentSession;
-    _authStream = supa.auth.onAuthStateChange;
+    _authSub = supa.auth.onAuthStateChange.listen((state) {
+      if (!mounted) return;
+      setState(() {
+        _session = state.session;
+        if (state.event == AuthChangeEvent.passwordRecovery) {
+          _recovering = true;
+        } else if (state.event == AuthChangeEvent.signedOut) {
+          _recovering = false;
+        }
+      });
+    });
+  }
+
+  @override
+  void dispose() {
+    _authSub?.cancel();
+    super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    return StreamBuilder<AuthState>(
-      stream: _authStream,
-      builder: (context, snapshot) {
-        final session = snapshot.data?.session ?? _session;
-        if (session == null) {
-          return const LoginPage();
-        }
-        // Provide a fresh store per session.
-        return _AuthenticatedScope(
-          key: ValueKey(session.user.id),
-          session: session,
-        );
-      },
+    final session = _session;
+    if (session == null) {
+      return const LoginPage();
+    }
+    if (_recovering) {
+      return ResetPasswordPage(
+        onDone: () => setState(() => _recovering = false),
+      );
+    }
+    return _AuthenticatedScope(
+      key: ValueKey(session.user.id),
+      session: session,
     );
   }
 }
